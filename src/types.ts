@@ -50,6 +50,41 @@ export type StorageLocal = {
   bgImage?: string;
   history?: TxHistory[]; 
   customNetworks?: Record<string, NetworkConfig>;
-  // ★修正: キーを自由に設定できるように変更
   historyCache?: Record<string, HistoryCacheData>; 
+};
+
+export type MarketData = {
+  price: number;
+  change: number;
+};
+
+export type TokenData = {
+  name: string;
+  symbol: string;
+  balance: string;
+  logo: string;
+  address: string;
+  market?: {
+    jpy: MarketData;
+    usd: MarketData;
+  };
+};
+
+export type NftData = {
+  name: string;
+  tokenId: string;
+  image: string;
+  collectionName: string;
+};
+
+export type AlchemyHistory = {
+  id: string;
+  hash: string;
+  type: 'send' | 'receive';
+  amount: string;
+  symbol: string;
+  from: string;
+  to: string;
+  date: string;
+  network: string;
 };

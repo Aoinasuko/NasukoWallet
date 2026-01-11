@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { GlassCard, Button, SmartIcon } from '../UI';
 import { Wrapper } from '../Layout';
-import type { TokenData, NftData } from '../../alchemy';
-import type { NetworkConfig } from '../../types';
+import type { TokenData, NftData, NetworkConfig } from '../../types';
 
 type Props = {
   wallet: any;
