@@ -1,5 +1,7 @@
 import { Alchemy, Network, AssetTransfersCategory, SortingOrder } from "alchemy-sdk";
 import { ethers } from "ethers";
+import type { TokenData, NftData, AlchemyHistory } from "./types";
+import { updateTokenPrices } from "./services/priceService";
 
 // ★APIキーはそのまま
 const API_KEY = "XXXXX"; 
@@ -14,54 +16,7 @@ const NETWORK_MAP: Record<string, Network> = {
   astar: Network.ASTAR_MAINNET,
 };
 
-const COINGECKO_PLATFORMS: Record<string, string> = {
-  mainnet: "ethereum",
-  polygon: "polygon-pos",
-  optimism: "optimistic-ethereum",
-  arbitrum: "arbitrum-one",
-  base: "base",
-  astar: "astar",
-};
-
-// ★修正: 価格データをJPY/USD両方持てる構造に変更
-export type MarketData = {
-  price: number;
-  change: number;
-};
-
-export type TokenData = {
-  name: string;
-  symbol: string;
-  balance: string;
-  logo: string;
-  address: string;
-  // 通貨ごとのデータを持たせる
-  market?: {
-    jpy: MarketData;
-    usd: MarketData;
-  };
-};
-
-export type NftData = {
-  name: string;
-  tokenId: string;
-  image: string;
-  collectionName: string;
-};
-
-export type AlchemyHistory = {
-  id: string;
-  hash: string;
-  type: 'send' | 'receive';
-  amount: string;
-  symbol: string;
-  from: string;
-  to: string;
-  date: string;
-  network: string;
-};
-
-// --- トークン一覧を取得する関数 (引数からcurrencyを削除) ---
+// --- トークン一覧を取得する関数 ---
 export const fetchTokens = async (address: string, networkKey: string): Promise<TokenData[]> => {
   const network = NETWORK_MAP[networkKey];
   if (!network) return [];
@@ -72,8 +27,8 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
   try {
     const balances = await alchemy.core.getTokenBalances(address);
     const tokens: TokenData[] = [];
-    const contractAddresses: string[] = [];
 
+    // Alchemyのmetadata取得は並列で行う
     await Promise.all(
       balances.tokenBalances.map(async (token) => {
         if (token.tokenBalance === "0") return;
@@ -90,33 +45,15 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
             logo: metadata.logo || "",
             address: token.contractAddress
           });
-          contractAddresses.push(token.contractAddress);
         } catch (e) { console.warn(e); }
       })
     );
 
-    // CoinGeckoで一括取得 (JPYとUSD両方)
-    const platform = COINGECKO_PLATFORMS[networkKey];
-    if (platform && contractAddresses.length > 0) {
-      try {
-        const addressesStr = contractAddresses.join(',');
-        // vs_currencies=usd,jpy を指定
-        const url = `https://api.coingecko.com/api/v3/simple/token_price/${platform}?contract_addresses=${addressesStr}&vs_currencies=usd,jpy&include_24hr_change=true`;
-        
-        const res = await fetch(url);
-        const priceData = await res.json();
-
-        tokens.forEach(token => {
-          const data = priceData[token.address.toLowerCase()];
-          if (data) {
-            token.market = {
-              jpy: { price: data.jpy || 0, change: data.jpy_24h_change || 0 },
-              usd: { price: data.usd || 0, change: data.usd_24h_change || 0 }
-            };
-          }
-        });
-      } catch (e) { console.warn("Price fetch failed:", e); }
+    // 価格情報の取得をサービスに委譲
+    if (tokens.length > 0) {
+        await updateTokenPrices(tokens, networkKey);
     }
+
     return tokens;
   } catch (error) {
     console.error("Alchemy Token Error:", error);

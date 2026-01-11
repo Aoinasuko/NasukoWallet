@@ -4,8 +4,8 @@ import { encryptData, decryptData, verifyTotp } from './cryptoUtils';
 import './App.css'; 
 
 import { DEFAULT_NETWORKS} from './constants';
-import type { SavedAccount, VaultData, StorageSession, StorageLocal, TxHistory, NetworkConfig } from './types';
-import { fetchTokens, fetchNfts, fetchTransactionHistory, type TokenData, type NftData, type AlchemyHistory } from './alchemy';
+import type { SavedAccount, VaultData, StorageSession, StorageLocal, TxHistory, NetworkConfig, TokenData, NftData, AlchemyHistory } from './types';
+import { fetchTokens, fetchNfts, fetchTransactionHistory } from './alchemy';
 
 import { WelcomeView, Setup2FAView, LoginView } from './components/views/Auth';
 import { HomeView } from './components/views/HomeView';
