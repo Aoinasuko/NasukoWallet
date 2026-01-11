@@ -27,11 +27,13 @@ export const updateTokenPrices = async (tokens: TokenData[], networkKey: string)
 
   // 1. Get USD/JPY Rate
   let usdToJpy = 150; // default fallback
+  let usdJpyChange = 0;
   try {
-    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=jpy');
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=jpy&include_24hr_change=true');
     const data = await res.json();
     if (data.tether?.jpy) {
       usdToJpy = data.tether.jpy;
+      usdJpyChange = data.tether.jpy_24h_change || 0;
     }
   } catch (e) {
     console.warn("Failed to fetch USD/JPY rate, using default", e);
@@ -99,9 +101,12 @@ export const updateTokenPrices = async (tokens: TokenData[], networkKey: string)
                 // Calculate JPY
                 const jpyPrice = usdPrice * usdToJpy;
 
+                // Calculate JPY change based on USD change and USD/JPY change
+                const jpyChange = ((1 + change24h / 100) * (1 + usdJpyChange / 100) - 1) * 100;
+
                 token.market = {
                     usd: { price: usdPrice, change: change24h },
-                    jpy: { price: jpyPrice, change: change24h } // DexScreener only gives USD change, assuming same % change for JPY
+                    jpy: { price: jpyPrice, change: jpyChange }
                 };
             }
         });
