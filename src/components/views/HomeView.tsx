@@ -110,7 +110,7 @@ export const HomeView = ({
                       <div><div className="font-bold text-sm text-cyan-50">{token.symbol}</div><div className="text-[10px] text-slate-400">{token.name}</div></div>
                     </div>
                     <div className="text-right">
-                      <div className="font-bold text-sm text-cyan-50">{token.balance}</div>
+                      <div className="font-bold text-sm text-cyan-50">{parseFloat(token.balance).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
                       {market ? (
                         <div className="flex flex-col items-end">
                           <div className="text-[10px] text-slate-400">≈ {sym}{value.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
