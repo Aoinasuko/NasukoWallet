@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "NasukoWallet",
+  "version": "1.0.0",
+  "description": "Nasuko Wallet Extension",
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "NasukoWallet"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://1rpc.io/sepolia/*",
+    "https://api.coingecko.com/*"
+  ]
+}
