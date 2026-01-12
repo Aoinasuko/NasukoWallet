@@ -42,7 +42,7 @@ export const SettingsAccountView = ({ privateKey, setView }: any) => {
 };
 
 // 3. General Settings
-export const SettingsGeneralView = ({ bgImage, onSetBg, setView }: any) => {
+export const SettingsGeneralView = ({ bgImage, onSetBg, mainNetwork, onSetMainNetwork, allNetworks, setView }: any) => {
   const onChange = (e: any) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -54,6 +54,20 @@ export const SettingsGeneralView = ({ bgImage, onSetBg, setView }: any) => {
   };
   return (
     <Wrapper title="一般設定" backAction={() => setView('settings_menu')}>
+      <GlassCard className="mb-4">
+        <h3 className="font-bold mb-2 text-cyan-100">メイン通貨(ネットワーク)決定</h3>
+        <p className="text-xs text-slate-400 mb-2">損益計算の基準となるネットワークを選択します。</p>
+        <select
+          value={mainNetwork || 'mainnet'}
+          onChange={(e) => onSetMainNetwork(e.target.value)}
+          className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm text-white"
+        >
+          {Object.entries(allNetworks).map(([key, net]: any) => (
+            <option key={key} value={key}>{net.name} ({net.symbol})</option>
+          ))}
+        </select>
+      </GlassCard>
+
       <GlassCard>
         <h3 className="font-bold mb-4 text-cyan-100">背景画像の設定</h3>
         {bgImage ? (

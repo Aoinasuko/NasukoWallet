@@ -12,7 +12,8 @@ import { HomeView } from './components/views/HomeView';
 import { SendView } from './components/views/SendView';
 import { HistoryView } from './components/views/HistoryView';
 import { AccountListView, ImportView } from './components/views/Accounts';
-import { ReceiveView, SwapView } from './components/views/Actions';
+import { ReceiveView } from './components/views/Actions';
+import { SwapView } from './components/views/SwapView';
 import { SettingsMenuView, SettingsAccountView, SettingsGeneralView, SettingsNetworkListView, SettingsNetworkAddView } from './components/views/Settings';
 
 // ★追加: 価格情報の型
@@ -26,6 +27,7 @@ type PriceInfo = {
 function App() {
   const [view, setView] = useState('loading'); 
   const [networkKey, setNetworkKey] = useState<string>('sepolia');
+  const [mainNetwork, setMainNetwork] = useState<string>('mainnet'); // ★追加: メインネットワーク
   const [allNetworks, setAllNetworks] = useState<Record<string, NetworkConfig>>(DEFAULT_NETWORKS);
 
   const [wallet, setWallet] = useState<ethers.Wallet | ethers.HDNodeWallet | null>(null);
@@ -105,6 +107,7 @@ function App() {
     setAllNetworks(merged);
     const net = (local.network && merged[local.network]) ? local.network : 'sepolia';
     setNetworkKey(net);
+    if (local.mainNetwork) setMainNetwork(local.mainNetwork); // ★追加: 読み込み
     if (local.bgImage) setBgImage(local.bgImage);
 
     if (!local.vault) setView('setup');
@@ -185,6 +188,7 @@ function App() {
   const handleImport = async (type: 'json'|'privateKey', val: string, pass: string, name: string) => { try { let w, j; if (type === 'json') { w = await ethers.Wallet.fromEncryptedJson(val, pass); j = val; } else { w = new ethers.Wallet(val.startsWith('0x') ? val : '0x' + val); j = await w.encrypt(pass); } if (savedAccounts.find(a => a.address === w.address)) return alert("既に登録されています"); const ep = encryptData(pass, sessionMasterPass); const n = [...savedAccounts, { name, address: w.address, encryptedJson: j, encryptedPassword: ep }]; setSavedAccounts(n); await chrome.storage.local.set({ accounts: n }); setView('list'); } catch { alert("インポート失敗: パスワードか鍵が間違っています"); } };
   const handleDeleteAccount = async (addr: string) => { if (!confirm("本当に削除しますか？")) return; const n = savedAccounts.filter(a => a.address !== addr); setSavedAccounts(n); await chrome.storage.local.set({ accounts: n }); };
   const handleSetBg = async (img: string | null) => { setBgImage(img); if(img) await chrome.storage.local.set({ bgImage: img }); else await chrome.storage.local.remove('bgImage'); };
+  const handleSetMainNetwork = async (key: string) => { setMainNetwork(key); await chrome.storage.local.set({ mainNetwork: key }); }; // ★追加: 保存
   const handleAddNetwork = async (form: any) => { const key = "custom_" + Date.now(); const newNet: NetworkConfig = { name: form.name, rpc: form.rpc, chainId: form.id, symbol: form.symbol, coingeckoId: "", explorer: form.explorer, color: "#888", logo: form.logo, isCustom: true }; const merged = { ...allNetworks, [key]: newNet }; setAllNetworks(merged); const local = await chrome.storage.local.get(['customNetworks']) as StorageLocal; await chrome.storage.local.set({ customNetworks: { ...(local.customNetworks || {}), [key]: newNet } }); setView('settings_network_list'); };
   const handleDeleteNetwork = async (key: string) => { if (!confirm("削除しますか？")) return; const merged = { ...allNetworks }; delete merged[key]; setAllNetworks(merged); const local = await chrome.storage.local.get(['customNetworks']) as StorageLocal; const current = local.customNetworks || {}; delete current[key]; await chrome.storage.local.set({ customNetworks: current }); if (networkKey === key) changeNetwork('sepolia'); };
   const handleSendComplete = (newTx: TxHistory) => { setTxHistory(prev => [newTx, ...prev]); };
@@ -202,11 +206,13 @@ function App() {
   if (view === 'list') return <AccountListView accounts={savedAccounts} onUnlock={handleUnlockAccount} onDelete={handleDeleteAccount} onAdd={() => setView('import')} />;
   if (view === 'import') return <ImportView onImport={handleImport} onCancel={() => setView('list')} />;
   if (view === 'receive' && wallet) return <ReceiveView address={wallet.address} setView={setView} />;
-  if (view === 'swap') return <SwapView networkName={allNetworks[networkKey].name} networkKey={networkKey} setView={setView} />;
+  // ★修正: Propsを追加
+  if (view === 'swap') return <SwapView networkKey={networkKey} allNetworks={allNetworks} mainNetwork={mainNetwork} wallet={wallet} txHistory={txHistory} setView={setView} onSwap={(tx: TxHistory) => { setTxHistory(p => [tx, ...p]); }} />;
   
   if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;
   if (view === 'settings_account' && wallet) return <SettingsAccountView privateKey={wallet.privateKey} setView={setView} />;
-  if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} setView={setView} />;
+  // ★修正: Propsを追加
+  if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} mainNetwork={mainNetwork} onSetMainNetwork={handleSetMainNetwork} allNetworks={allNetworks} setView={setView} />;
   if (view === 'settings_network_list') return <SettingsNetworkListView allNetworks={allNetworks} onDelete={handleDeleteNetwork} setView={setView} />;
   if (view === 'settings_network_add') return <SettingsNetworkAddView onAdd={handleAddNetwork} setView={setView} />;
 

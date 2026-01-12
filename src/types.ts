@@ -36,6 +36,9 @@ export type TxHistory = {
   to: string;
   date: string;
   network: string;
+  // ★追加: P/L計算用
+  swapRateToMain?: number; // Swap時のメイン通貨換算レート (1 Token = X MainCurrency)
+  priceInMain?: number;    // Swap時のメイン通貨換算価格 (Total Value in MainCurrency)
 };
 
 export type HistoryCacheData = {
@@ -50,7 +53,8 @@ export type StorageLocal = {
   bgImage?: string;
   history?: TxHistory[]; 
   customNetworks?: Record<string, NetworkConfig>;
-  historyCache?: Record<string, HistoryCacheData>; 
+  historyCache?: Record<string, HistoryCacheData>;
+  mainNetwork?: string; // ★追加: メインネットワーク設定
 };
 
 export type MarketData = {
