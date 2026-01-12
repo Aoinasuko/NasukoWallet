@@ -218,46 +218,50 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
       } 
       else if (!isFromStable && fromCoingeckoId) {
           // パターンB: 売り (Crypto -> Stable/Other)
-          // 以前買ったCryptoを売る場合 -> Cryptoの過去価格を取得
-          if (prevTxReverse.priceInUsd && prevTxReverse.priceInUsd > 0) {
-              histUnitPriceUsd = prevTxReverse.priceInUsd;
-          } else {
+          // 例: PEPE -> USDC (以前 USDC -> PEPE で買ったものを売る)
+          
+          // 優先1: レートから逆算 (購入時に支払ったStableコインの量から単価を出す)
+          // 以前: Stable -> Crypto. Rate = Crypto / Stable.
+          // 当時のCrypto単価($) = 1 / Rate.
+          if (isToStable && prevTxReverse.exchangeRate) {
+              histUnitPriceUsd = 1 / prevTxReverse.exchangeRate;
+          }
+          // 優先2: APIから取得 (レートがない場合)
+          else {
               isPrediction = true;
               const p = await fetchHistoricalPrice(fromCoingeckoId, prevTxReverse.date);
               if (p && p > 0) histUnitPriceUsd = p;
           }
       }
       else if (!isToStable && toCoingeckoId) {
-          // パターンC: 買い戻し (Stable/Other -> Crypto) ★ここが修正ポイント
+          // パターンC: 買い戻し (Stable/Other -> Crypto)
           // 以前売ったCryptoを買い戻す場合 -> Crypto(To)の過去価格を取得して比較
-          // 以前売った価格(Hist) より 今買う価格(ToPrice) が安ければ得
           
           isPrediction = true;
           const p = await fetchHistoricalPrice(toCoingeckoId, prevTxReverse.date);
           if (p && p > 0) {
-              // ここでは「比較対象」を現在のFrom単価ではなく、
-              // 特例として「Toトークンの価格変動」で損益を出すため、計算ロジックが異なる
-              
-              // 買い戻しの場合のUnit Profit: (売値 - 買値) / 買値
+              // 買い戻しの場合: (売値 - 買値) / 買値
               if (toPriceUsd > 0) {
                  const diff = (p - toPriceUsd) / toPriceUsd * 100;
                  unitProfitPercent = formatPercent(diff);
                  unitProfitColor = diff >= 0 ? "text-green-400" : "text-red-400";
                  displayHistUnitPrice = `$${formatDisplayPrice(p)} (Sold)`;
-                 // 下の共通ロジックを通さないためにフラグを立てるか、ここで計算完了とする
-                 histUnitPriceUsd = -1; // Skip normal flow
+                 
+                 // 特殊フロー: ここで計算完了
+                 histUnitPriceUsd = -1; 
               }
           }
       }
       else if (prevTxReverse.exchangeRate) {
           // パターンD: IDなし、レートのみ (バックアップ)
+          // 相手がStableならレートから推測可能
           if (isToStable) {
              histUnitPriceUsd = 1 / prevTxReverse.exchangeRate;
           }
       }
 
       // ---------------------------------------------------------
-      // 2. 単価比較 (通常フロー: 売りの場合 or 単価取得済みの場合)
+      // 2. 単価比較 (通常フロー: 売りの場合)
       // ---------------------------------------------------------
       if (histUnitPriceUsd > 0 && fromPriceUsd > 0) {
           const diff = (fromPriceUsd - histUnitPriceUsd) / histUnitPriceUsd * 100;
@@ -269,15 +273,9 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
       // ---------------------------------------------------------
       // 3. 総額比較 (Lower Section)
       // ---------------------------------------------------------
-      // ※買い戻し(Pattern C)の場合、FromはStable(約$1)なので総額変動はほぼないが、
-      // ユーザーの資産増減としては「同じ$100で買える枚数が増えた」= 得、と表現したい。
-      // しかしこの画面は「Swap Fromの価値変動」を出すUIになっている。
-      // 厳密なP/Lを出すなら「前回売った時の総額USD」vs「今回その枚数を買い戻すのに必要な総額USD」だが、
-      // ここではシンプルに「投入するFromトークン(USD)」の価値比較を行う。
-      
       let basePriceForTotal = histUnitPriceUsd;
       if (basePriceForTotal === -1) {
-          // 買い戻し特例: From(USDC)の価値は変わらないので、$1とする
+          // 買い戻し(Pattern C)の総額比較: From(USDC)の価値は変わらない($1)
           basePriceForTotal = 1.0; 
       }
 
@@ -290,10 +288,6 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
           let totalDiffPerc = 0;
           if (totalPrevUsd > 0) totalDiffPerc = (totalDiffVal / totalPrevUsd) * 100;
 
-          // 買い戻し(Pattern C)の場合は、総額(USDC)の価値は変わらないので0%になるのが正しいが、
-          // ユーザー心理としては「得」を表示したい場合、Unit Profitを見て判断してもらう。
-          // ここでは正直にUSDC価値の変動(ほぼ0)を表示する。
-          
           totalProfitPercent = formatPercent(totalDiffPerc);
           totalProfitColor = totalDiffVal >= 0 ? "text-green-400" : "text-red-400";
           
