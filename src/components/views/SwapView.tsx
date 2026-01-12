@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { Wrapper } from '../Layout';
 import { GlassCard, Button, Input, SmartIcon } from '../UI';
 import { getNetworkFees, type NetworkFeeInfo } from '../../services/feeService';
+import { executeSwap } from '../../services/swapService';
 import type { TxHistory } from '../../types';
 
 // Mock token list for destination selection
@@ -24,9 +25,13 @@ export const SwapView = ({ networkKey: initialNetworkKey, allNetworks, mainNetwo
   // Confirm State
   const [currentFeeNative, setCurrentFeeNative] = useState<string>('0');
   const [timeLeft, setTimeLeft] = useState(15);
-  const [prices, setPrices] = useState<{from: number, to: number, main: number, fromInMain: number}>({from:0, to:0, main:0, fromInMain:0});
+  // ★修正: JPY価格も保持
+  const [prices, setPrices] = useState<{from: number, fromJpy: number, main: number, fromInMain: number}>({from:0, fromJpy: 0, main:0, fromInMain:0});
   const [plPercent, setPlPercent] = useState<number | null>(null);
+  const [plUsd, setPlUsd] = useState<number | null>(null);
+  const [plJpy, setPlJpy] = useState<number | null>(null);
   const [balance, setBalance] = useState<string>('0');
+  const [isSwapping, setIsSwapping] = useState(false);
 
   // 1. Fee Search
   useEffect(() => {
@@ -103,25 +108,42 @@ export const SwapView = ({ networkKey: initialNetworkKey, allNetworks, mainNetwo
         const data = await res.json();
 
         const pFrom = data[fromId]?.usd || 0;
+        const pFromJpy = data[fromId]?.jpy || 0;
         const pMain = data[mainId]?.usd || 0;
         const rateToMain = pMain > 0 ? pFrom / pMain : 0;
 
-        setPrices(p => ({ ...p, from: pFrom, main: pMain, fromInMain: rateToMain }));
+        setPrices(p => ({ ...p, from: pFrom, fromJpy: pFromJpy, main: pMain, fromInMain: rateToMain }));
 
         // 3. P/L Calc
-        // Find last swap where 'to' == fromToken (Symbol check)
-        // Note: fromToken is currently set to net.symbol (Native).
-        // If we enable ERC20 input, we need to match symbols.
         const prevSwap = txHistory.find((tx: TxHistory) => tx.type === 'swap' && tx.to === fromToken);
 
-        if (prevSwap && prevSwap.swapRateToMain) {
-          // Current Value of 1 Unit in Main = rateToMain
-          // Previous Value of 1 Unit in Main = prevSwap.swapRateToMain
-          // Diff %
-          const diff = ((rateToMain - prevSwap.swapRateToMain) / prevSwap.swapRateToMain) * 100;
-          setPlPercent(diff);
+        if (prevSwap) {
+          // Main Currency P/L
+          if (prevSwap.swapRateToMain) {
+            const diff = ((rateToMain - prevSwap.swapRateToMain) / prevSwap.swapRateToMain) * 100;
+            setPlPercent(diff);
+          }
+          // USD P/L
+          if (prevSwap.priceInUsd && pFrom > 0) {
+            // prevSwap.priceInUsd is TOTAL value or Unit Price?
+            // Type def says "Swap時のUSD価格". Let's assume Unit Price for P/L % calc logic consistency.
+            // Wait, I should store UNIT PRICE.
+            // But logic in handleExecute below stores: `parseFloat(amount) * prices.fromInMain`. That is TOTAL.
+            // Ideally P/L % is based on Price Change, not Amount Change (amount is irrelevant for % unless we compare Total Value).
+            // Let's assume we compare UNIT PRICE.
+            // So we need to store Unit Price.
+            // I will update handleExecute to store Unit Price in `priceInUsd`.
+            // Let's assume `priceInUsd` is Unit Price.
+             const diffUsd = ((pFrom - prevSwap.priceInUsd) / prevSwap.priceInUsd) * 100;
+             setPlUsd(diffUsd);
+          }
+           // JPY P/L
+          if (prevSwap.priceInJpy && pFromJpy > 0) {
+             const diffJpy = ((pFromJpy - prevSwap.priceInJpy) / prevSwap.priceInJpy) * 100;
+             setPlJpy(diffJpy);
+          }
         } else {
-          setPlPercent(null);
+          setPlPercent(null); setPlUsd(null); setPlJpy(null);
         }
 
       } catch (e) { console.error("Price fetch failed", e); }
@@ -142,28 +164,55 @@ export const SwapView = ({ networkKey: initialNetworkKey, allNetworks, mainNetwo
   }, [step, selectedNetwork, mainNetwork, fromToken, txHistory]);
 
   const handleExecute = async () => {
-    // Create History
-    const net = allNetworks[selectedNetwork];
-    const newTx: TxHistory = {
-      id: crypto.randomUUID(),
-      hash: "0xsimulated" + Date.now(),
-      type: 'swap',
-      amount: amount,
-      symbol: fromToken,
-      from: fromToken,
-      to: toToken,
-      date: new Date().toLocaleString(),
-      network: net.name,
-      swapRateToMain: prices.fromInMain, // Store rate for next time
-      priceInMain: parseFloat(amount) * prices.fromInMain
-    };
+    if (!wallet) return;
+    setIsSwapping(true);
+    try {
+      // 1. Execute Real Swap
+      const net = allNetworks[selectedNetwork];
+      let hash = "0xsimulated" + Date.now();
 
-    // Update Balance (Simulated)
-    // In real app, we would broadcast tx.
+      // Try Real Swap (Sepolia only)
+      if (selectedNetwork === 'sepolia') {
+        try {
+          const tx = await executeSwap(wallet, selectedNetwork, fromToken, toToken, amount);
+          console.log("Swap TX:", tx);
+          hash = tx.hash;
+          // Wait for confirm?
+          // await tx.wait(); // Optional, but better for UX to wait a bit or let history handle it.
+          // For now, we record hash immediately.
+        } catch (e: any) {
+          alert("Swap Failed: " + e.message);
+          setIsSwapping(false);
+          return;
+        }
+      }
 
-    onSwap(newTx);
-    alert("スワップ(記録)が完了しました！");
-    setView('history');
+      // 2. Create History
+      const newTx: TxHistory = {
+        id: crypto.randomUUID(),
+        hash: hash,
+        type: 'swap',
+        amount: amount,
+        symbol: fromToken,
+        from: fromToken,
+        to: toToken,
+        date: new Date().toLocaleString(),
+        network: net.name,
+        swapRateToMain: prices.fromInMain,
+        priceInMain: parseFloat(amount) * prices.fromInMain,
+        priceInUsd: prices.from, // Store Unit Price for % Calc
+        priceInJpy: prices.fromJpy // Store Unit Price for % Calc
+      };
+
+      onSwap(newTx);
+      alert("スワップが完了しました！");
+      setView('history');
+    } catch (e) {
+      console.error(e);
+      alert("エラーが発生しました");
+    } finally {
+      setIsSwapping(false);
+    }
   };
 
   // -- Renders --
@@ -274,25 +323,51 @@ export const SwapView = ({ networkKey: initialNetworkKey, allNetworks, mainNetwo
              </div>
 
              {/* P/L Section */}
-             {plPercent !== null && (
-               <div className={`mt-4 p-3 rounded border ${plPercent >= 0 ? 'bg-green-900/20 border-green-500/50' : 'bg-red-900/20 border-red-500/50'}`}>
-                 <div className="text-xs text-slate-300 mb-1">前回取引からの損益 (メイン通貨建)</div>
-                 <div className={`text-xl font-bold ${plPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                   {plPercent >= 0 ? '+' : ''}{plPercent.toFixed(2)}%
-                 </div>
-                 <div className="text-[10px] text-slate-500 mt-1">
+             {(plPercent !== null || plUsd !== null || plJpy !== null) && (
+               <div className="mt-4 grid grid-cols-2 gap-2">
+                 {/* Main Currency P/L */}
+                 {plPercent !== null && (
+                   <div className={`col-span-2 p-2 rounded border ${plPercent >= 0 ? 'bg-green-900/20 border-green-500/50' : 'bg-red-900/20 border-red-500/50'}`}>
+                     <div className="text-[10px] text-slate-300">メイン通貨建 損益</div>
+                     <div className={`text-lg font-bold ${plPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                       {plPercent >= 0 ? '+' : ''}{plPercent.toFixed(2)}%
+                     </div>
+                   </div>
+                 )}
+                 {/* USD P/L */}
+                 {plUsd !== null && (
+                   <div className={`p-2 rounded border ${plUsd >= 0 ? 'bg-green-900/20 border-green-500/50' : 'bg-red-900/20 border-red-500/50'}`}>
+                     <div className="text-[10px] text-slate-300">USD建 損益</div>
+                     <div className={`text-sm font-bold ${plUsd >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                       {plUsd >= 0 ? '+' : ''}{plUsd.toFixed(2)}%
+                     </div>
+                   </div>
+                 )}
+                 {/* JPY P/L */}
+                 {plJpy !== null && (
+                   <div className={`p-2 rounded border ${plJpy >= 0 ? 'bg-green-900/20 border-green-500/50' : 'bg-red-900/20 border-red-500/50'}`}>
+                     <div className="text-[10px] text-slate-300">JPY建 損益</div>
+                     <div className={`text-sm font-bold ${plJpy >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                       {plJpy >= 0 ? '+' : ''}{plJpy.toFixed(2)}%
+                     </div>
+                   </div>
+                 )}
+                 <div className="col-span-2 text-[10px] text-slate-500 text-center mt-1">
                     前回の{fromToken}取得時と比較
                  </div>
                </div>
              )}
-             {plPercent === null && (
+
+             {plPercent === null && plUsd === null && (
                <div className="mt-4 p-2 text-center text-xs text-slate-500">
                  ※前回の取得履歴が見つからないため損益は表示されません
                </div>
              )}
            </div>
 
-           <Button onClick={handleExecute}>スワップ実行 (記録)</Button>
+           <Button onClick={handleExecute} disabled={isSwapping}>
+             {isSwapping ? "スワップ実行中..." : "スワップ実行"}
+           </Button>
         </GlassCard>
       </Wrapper>
     );

@@ -39,6 +39,8 @@ export type TxHistory = {
   // ★追加: P/L計算用
   swapRateToMain?: number; // Swap時のメイン通貨換算レート (1 Token = X MainCurrency)
   priceInMain?: number;    // Swap時のメイン通貨換算価格 (Total Value in MainCurrency)
+  priceInUsd?: number;     // Swap時のUSD価格
+  priceInJpy?: number;     // Swap時のJPY価格
 };
 
 export type HistoryCacheData = {
