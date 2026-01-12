@@ -55,3 +55,11 @@ export const DEX_URLS: Record<string, string> = {
   avalanche: "https://traderjoexyz.com/", optimism: "https://app.uniswap.org/", arbitrum: "https://app.uniswap.org/",
   base: "https://app.uniswap.org/", astar: "https://app.arthswap.org/", sepolia: "https://app.uniswap.org/",
 };
+
+export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; USDC: string }> = {
+  sepolia: {
+    ROUTER: "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E", // SwapRouter02
+    WETH: "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", // Sepolia WETH
+    USDC: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia USDC
+  }
+};
