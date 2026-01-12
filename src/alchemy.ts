@@ -4,7 +4,7 @@ import type { TokenData, NftData, AlchemyHistory } from "./types";
 import { updateTokenPrices } from "./services/priceService";
 
 // ★APIキーはそのまま
-const API_KEY = "iBCczCbjctfao-Of0uzd2"; 
+const API_KEY = "XXXXX"; 
 
 const NETWORK_MAP: Record<string, Network> = {
   mainnet: Network.ETH_MAINNET,

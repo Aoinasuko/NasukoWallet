@@ -13,11 +13,14 @@ import { HomeView } from './components/views/HomeView';
 import { SendView } from './components/views/SendView';
 import { HistoryView } from './components/views/HistoryView';
 import { AccountListView, ImportView } from './components/views/Accounts';
-import { ReceiveView, SwapView } from './components/views/Actions';
 import { SettingsMenuView, SettingsAccountView, SettingsGeneralView, SettingsNetworkListView, SettingsNetworkAddView } from './components/views/Settings';
 
+// ★修正1: ReceiveViewのみActionsから読み込む
+import { ReceiveView } from './components/views/Actions';
+// ★修正2: SwapViewは、あなたが作った高機能版ファイルを読み込む
+import { SwapView } from './components/views/SwapView';
+
 function App() {
-  // --- グローバルState ---
   const [view, setView] = useState('loading'); 
   const [networkKey, setNetworkKey] = useState<string>('sepolia');
   const [allNetworks, setAllNetworks] = useState<Record<string, NetworkConfig>>(DEFAULT_NETWORKS);
@@ -28,14 +31,12 @@ function App() {
   const [currentPrice, setCurrentPrice] = useState<{usd: number, jpy: number, usdChange: number, jpyChange: number} | null>(null);
   const [currency, setCurrency] = useState<'JPY' | 'USD'>('JPY');
   
-  // 資産・履歴データ
   const [tokenList, setTokenList] = useState<TokenData[]>([]);
   const [nftList, setNftList] = useState<NftData[]>([]);
   const [isAssetLoading, setIsAssetLoading] = useState(false);
   const [txHistory, setTxHistory] = useState<TxHistory[]>([]);
   const [historyLastUpdated, setHistoryLastUpdated] = useState<string | null>(null);
 
-  // 認証・設定用State
   const [masterPass, setMasterPass] = useState(''); 
   const [sessionMasterPass, setSessionMasterPass] = useState(''); 
   const [tempSecret, setTempSecret] = useState<any>(null); 
@@ -43,15 +44,13 @@ function App() {
   const [bgImage, setBgImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // --- 初期化 & 自動更新 ---
   useEffect(() => { checkLoginStatus(); }, []);
 
-  // 資産ロード
   useEffect(() => {
     const loadAssets = async () => {
       if (!wallet) return;
       setIsAssetLoading(true);
-      const tokens = await fetchTokens(wallet.address, networkKey); // 通貨設定は不要になりました
+      const tokens = await fetchTokens(wallet.address, networkKey);
       setTokenList(tokens);
       const nfts = await fetchNfts(wallet.address, networkKey);
       setNftList(nfts);
@@ -60,7 +59,6 @@ function App() {
     loadAssets();
   }, [wallet, networkKey]);
 
-  // 履歴ロード (キャッシュ + API)
   useEffect(() => {
     const loadHistory = async () => {
       if (!wallet) return;
@@ -91,7 +89,6 @@ function App() {
     if (wallet) loadHistory();
   }, [wallet, networkKey, view]);
 
-  // ログイン状態チェック
   const checkLoginStatus = async () => {
     const session = await chrome.storage.session.get(['masterPass']) as StorageSession;
     const local = await chrome.storage.local.get(['vault', 'accounts', 'network', 'bgImage', 'customNetworks']) as StorageLocal;
@@ -112,7 +109,6 @@ function App() {
     else setView('login');
   };
 
-  // --- 共通アクション ---
   const changeNetwork = (key: string) => {
     setNetworkKey(key);
     const net = allNetworks[key];
@@ -150,107 +146,22 @@ function App() {
     try { const provider = new ethers.JsonRpcProvider(targetRpc); const connected = targetWallet.connect(provider); setWallet(connected); const bal = await provider.getBalance(connected.address); setBalance(ethers.formatEther(bal)); } catch (e) { setBalance('0'); }
   };
 
-  // --- イベントハンドラ ---
-  
-  // Auth
-  const handleStartSetup = (pass: string, secret: any, qr: string) => {
-    setMasterPass(pass);
-    setTempSecret(secret); 
-    setQrDataUrl(qr);
-    setView('2fa_setup');
-  };
+  // Auth Handlers
+  const handleStartSetup = (pass: string, secret: any, qr: string) => { setMasterPass(pass); setTempSecret(secret); setQrDataUrl(qr); setView('2fa_setup'); };
+  const handleFinishSetup = async (code: string) => { if (!verifyTotp(code, tempSecret.base32 || tempSecret)) return alert("コードが違います"); const v: VaultData = { totpSecret: tempSecret.base32 || tempSecret, isSetupComplete: true }; await chrome.storage.local.set({ vault: encryptData(v, masterPass) }); await chrome.storage.session.set({ masterPass }); setSessionMasterPass(masterPass); setView('list'); };
+  const handleLogin = async (pass: string, code: string) => { setLoading(true); try { const local = await chrome.storage.local.get(['vault']) as StorageLocal; const v = decryptData(local.vault!, pass) as VaultData; if (!v || !verifyTotp(code, v.totpSecret)) throw new Error(); await chrome.storage.session.set({ masterPass: pass }); setSessionMasterPass(pass); setView('list'); fetchPrice(allNetworks[networkKey]); } catch { alert("認証に失敗しました"); } finally { setLoading(false); } };
 
-  const handleFinishSetup = async (code: string) => {
-    if (!verifyTotp(code, tempSecret.base32 || tempSecret)) return alert("コードが違います");
-    const v: VaultData = { totpSecret: tempSecret.base32 || tempSecret, isSetupComplete: true };
-    await chrome.storage.local.set({ vault: encryptData(v, masterPass) });
-    await chrome.storage.session.set({ masterPass });
-    setSessionMasterPass(masterPass);
-    setView('list');
-  };
+  // Account Handlers
+  const handleUnlockAccount = async (acc: SavedAccount) => { setLoading(true); try { const pass = decryptData(acc.encryptedPassword, sessionMasterPass); const w = await ethers.Wallet.fromEncryptedJson(acc.encryptedJson, pass); chrome.runtime.sendMessage({ type: "WALLET_UNLOCKED", address: w.address }); updateBalance(w, allNetworks[networkKey].rpc); setView('home'); } catch { alert("解除に失敗しました"); } finally { setLoading(false); } };
+  const handleImport = async (type: 'json'|'privateKey', val: string, pass: string, name: string) => { try { let w, j; if (type === 'json') { w = await ethers.Wallet.fromEncryptedJson(val, pass); j = val; } else { w = new ethers.Wallet(val.startsWith('0x') ? val : '0x' + val); j = await w.encrypt(pass); } if (savedAccounts.find(a => a.address === w.address)) return alert("既に登録されています"); const ep = encryptData(pass, sessionMasterPass); const n = [...savedAccounts, { name, address: w.address, encryptedJson: j, encryptedPassword: ep }]; setSavedAccounts(n); await chrome.storage.local.set({ accounts: n }); setView('list'); } catch { alert("インポート失敗: パスワードか鍵が間違っています"); } };
+  const handleDeleteAccount = async (addr: string) => { if (!confirm("本当に削除しますか？")) return; const n = savedAccounts.filter(a => a.address !== addr); setSavedAccounts(n); await chrome.storage.local.set({ accounts: n }); };
 
-  const handleLogin = async (pass: string, code: string) => {
-    setLoading(true);
-    try {
-      const local = await chrome.storage.local.get(['vault']) as StorageLocal;
-      const v = decryptData(local.vault!, pass) as VaultData;
-      if (!v || !verifyTotp(code, v.totpSecret)) throw new Error();
-      await chrome.storage.session.set({ masterPass: pass });
-      setSessionMasterPass(pass);
-      setView('list'); 
-      fetchPrice(allNetworks[networkKey]);
-    } catch { 
-      alert("認証に失敗しました"); 
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Settings Handlers
+  const handleSetBg = async (img: string | null) => { setBgImage(img); if(img) await chrome.storage.local.set({ bgImage: img }); else await chrome.storage.local.remove('bgImage'); };
+  const handleAddNetwork = async (form: any) => { const key = "custom_" + Date.now(); const newNet: NetworkConfig = { name: form.name, rpc: form.rpc, chainId: form.id, symbol: form.symbol, coingeckoId: "", explorer: form.explorer, color: "#888", logo: form.logo, isCustom: true }; const merged = { ...allNetworks, [key]: newNet }; setAllNetworks(merged); const local = await chrome.storage.local.get(['customNetworks']) as StorageLocal; await chrome.storage.local.set({ customNetworks: { ...(local.customNetworks || {}), [key]: newNet } }); setView('settings_network_list'); };
+  const handleDeleteNetwork = async (key: string) => { if (!confirm("削除しますか？")) return; const merged = { ...allNetworks }; delete merged[key]; setAllNetworks(merged); const local = await chrome.storage.local.get(['customNetworks']) as StorageLocal; const current = local.customNetworks || {}; delete current[key]; await chrome.storage.local.set({ customNetworks: current }); if (networkKey === key) changeNetwork('sepolia'); };
 
-  // Account
-  const handleUnlockAccount = async (acc: SavedAccount) => {
-    setLoading(true);
-    try {
-      const pass = decryptData(acc.encryptedPassword, sessionMasterPass);
-      const w = await ethers.Wallet.fromEncryptedJson(acc.encryptedJson, pass);
-      chrome.runtime.sendMessage({ type: "WALLET_UNLOCKED", address: w.address });
-      updateBalance(w, allNetworks[networkKey].rpc);
-      setView('home');
-    } catch { alert("解除に失敗しました"); } finally { setLoading(false); }
-  };
-
-  const handleImport = async (type: 'json'|'privateKey', val: string, pass: string, name: string) => {
-    try {
-      let w, j;
-      if (type === 'json') { w = await ethers.Wallet.fromEncryptedJson(val, pass); j = val; }
-      else { w = new ethers.Wallet(val.startsWith('0x') ? val : '0x' + val); j = await w.encrypt(pass); }
-      
-      if (savedAccounts.find(a => a.address === w.address)) return alert("既に登録されています");
-      
-      const ep = encryptData(pass, sessionMasterPass);
-      const n = [...savedAccounts, { name, address: w.address, encryptedJson: j, encryptedPassword: ep }];
-      setSavedAccounts(n);
-      await chrome.storage.local.set({ accounts: n });
-      setView('list');
-    } catch { alert("インポート失敗: パスワードか鍵が間違っています"); }
-  };
-
-  const handleDeleteAccount = async (addr: string) => {
-    if (!confirm("本当に削除しますか？")) return;
-    const n = savedAccounts.filter(a => a.address !== addr);
-    setSavedAccounts(n);
-    await chrome.storage.local.set({ accounts: n });
-  };
-
-  // Settings
-  const handleSetBg = async (img: string | null) => {
-    setBgImage(img);
-    if(img) await chrome.storage.local.set({ bgImage: img });
-    else await chrome.storage.local.remove('bgImage');
-  };
-
-  const handleAddNetwork = async (form: any) => {
-    const key = "custom_" + Date.now();
-    const newNet: NetworkConfig = { 
-      name: form.name, rpc: form.rpc, chainId: form.id, symbol: form.symbol, 
-      coingeckoId: "", explorer: form.explorer, color: "#888", logo: form.logo, isCustom: true 
-    };
-    const merged = { ...allNetworks, [key]: newNet };
-    setAllNetworks(merged);
-    const local = await chrome.storage.local.get(['customNetworks']) as StorageLocal;
-    await chrome.storage.local.set({ customNetworks: { ...(local.customNetworks || {}), [key]: newNet } });
-    setView('settings_network_list');
-  };
-
-  const handleDeleteNetwork = async (key: string) => {
-    if (!confirm("削除しますか？")) return;
-    const merged = { ...allNetworks }; delete merged[key]; setAllNetworks(merged);
-    const local = await chrome.storage.local.get(['customNetworks']) as StorageLocal;
-    const current = local.customNetworks || {}; delete current[key];
-    await chrome.storage.local.set({ customNetworks: current });
-    if (networkKey === key) changeNetwork('sepolia');
-  };
-
-  // Tx Callback (Send & Swap)
+  // ★重要: スワップ完了時も履歴を更新するための共通ハンドラ
   const handleTxComplete = async (newTx: TxHistory) => {
     // 画面即時反映
     const updatedHistory = [newTx, ...txHistory].slice(0, 50);
@@ -268,21 +179,19 @@ function App() {
     }
   };
 
-  // --- Views Rendering ---
-  
+  // --- Views ---
   if (view === 'loading') return <div className="text-slate-500 p-10 text-center text-xs">Loading...</div>;
   if (view === 'setup') return <WelcomeView onStartSetup={handleStartSetup} />;
   if (view === '2fa_setup') return <Setup2FAView qrUrl={qrDataUrl} onFinishSetup={handleFinishSetup} />;
   if (view === 'login') return <LoginView onLogin={handleLogin} loading={loading} />;
   
-  // Wallet Active Views
   if (wallet) {
     if (view === 'home') return <HomeView wallet={wallet} balance={balance} networkKey={networkKey} allNetworks={allNetworks} currentPrice={currentPrice} currency={currency} onSetCurrency={() => setCurrency(prev => prev==='JPY'?'USD':'JPY')} tokenList={tokenList} nftList={nftList} isAssetLoading={isAssetLoading} onChangeNetwork={changeNetwork} setView={setView} onLogout={() => { setWallet(null); setView('list'); }} bgImage={bgImage} />;
     if (view === 'send') return <SendView wallet={wallet} balance={balance} networkKey={networkKey} allNetworks={allNetworks} savedAccounts={savedAccounts} setView={setView} onTxComplete={handleTxComplete} updateBalance={() => updateBalance(wallet, allNetworks[networkKey].rpc)} />;
     if (view === 'history') return <HistoryView wallet={wallet} networkKey={networkKey} allNetworks={allNetworks} setView={setView} txHistory={txHistory} setTxHistory={setTxHistory} lastUpdated={historyLastUpdated} />;
     if (view === 'receive') return <ReceiveView address={wallet.address} setView={setView} />;
     
-    // ユーザー作成のSwapViewがある場合はそちらを使用（Propsを適切に渡す）
+    // ★修正3: 高機能版SwapViewを正しく呼び出す
     if (view === 'swap') return <SwapView 
       networkKey={networkKey} 
       allNetworks={allNetworks} 
@@ -300,11 +209,9 @@ function App() {
     if (view === 'settings_network_add') return <SettingsNetworkAddView onAdd={handleAddNetwork} setView={setView} />;
   }
 
-  // No Wallet Views
   if (view === 'list') return <AccountListView accounts={savedAccounts} onUnlock={handleUnlockAccount} onDelete={handleDeleteAccount} onAdd={() => setView('import')} />;
   if (view === 'import') return <ImportView onImport={handleImport} onCancel={() => setView('list')} />;
   
-  // Fallback for settings when wallet is not active (logical fallback)
   if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;
   if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} setView={setView} />;
 
