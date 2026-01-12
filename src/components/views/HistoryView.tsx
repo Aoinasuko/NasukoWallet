@@ -38,21 +38,33 @@ export const HistoryView = ({ wallet, networkKey, allNetworks, setView, txHistor
         {myHistory.map((item) => (
           <GlassCard key={item.id} className="p-4 relative group hover:border-cyan-500/40 transition">
             <div className="flex justify-between items-start mb-1">
-              <div className={`font-bold text-sm flex items-center gap-1 ${item.type === 'receive' ? 'text-green-400' : 'text-cyan-50'}`}>
-                {item.type === 'send' ? '↗ 送金' : '↙ 入金'}
+              <div className={`font-bold text-sm flex items-center gap-1 
+                ${item.type === 'receive' ? 'text-green-400' : item.type === 'send' ? 'text-red-400' : 'text-purple-400'}`}>
+                {/* ★修正: スワップの表示を追加 */}
+                {item.type === 'send' ? '↗ 送金' : item.type === 'receive' ? '↙ 入金' : '⇄ スワップ'}
               </div>
               <div className="text-[10px] text-slate-400">{item.date}</div>
             </div>
             
             <div className="text-lg font-bold text-white mb-1">
-              {item.type === 'receive' ? '+' : '-'}{item.amount} <span className="text-sm font-normal text-cyan-200/70">{item.symbol}</span>
+              {/* ★修正: スワップの場合は金額のみ表示 (符号なし) */}
+              {item.type === 'swap' ? '' : (item.type === 'receive' ? '+' : '-')}
+              {item.amount} <span className="text-sm font-normal text-cyan-200/70">{item.symbol}</span>
             </div>
+            
+            {/* スワップの場合、何に交換したかを表示 */}
+            {item.type === 'swap' && (
+              <div className="text-xs text-purple-300 mb-1">
+                To: {item.to} {/* toTokenSymbolが入っている想定 */}
+              </div>
+            )}
             
             <div className="text-[10px] text-slate-500 mb-2">Network: {item.network}</div>
             
             <div className="flex gap-2 text-xs">
               <a href={`${allNetworks[networkKey]?.explorer}${item.hash}`} target="_blank" className="text-blue-400 hover:text-blue-300">Explorer ↗</a>
             </div>
+            {/* ... */}
           </GlassCard>
         ))}
       </div>

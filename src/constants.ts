@@ -1,7 +1,6 @@
-// src/constants.ts
 import type { NetworkConfig } from './types';
 
-// ★修正: ロゴ画像を追加し、型をNetworkConfigに統一
+// ... (DEFAULT_NETWORKS は変更なしなのでそのまま) ...
 export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
   mainnet: { 
     name: "Ethereum", rpc: "https://1rpc.io/eth", chainId: "1", symbol: "ETH", coingeckoId: "ethereum", 
@@ -46,7 +45,7 @@ export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
   sepolia: { 
     name: "Sepolia", rpc: "https://1rpc.io/sepolia", chainId: "11155111", symbol: "SepoliaETH", coingeckoId: "ethereum", 
     explorer: "https://sepolia.etherscan.io/tx/", color: "#00d0ff",
-    logo: "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/icon/eth.png" // テストネットは白黒アイコン等で区別
+    logo: "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/icon/eth.png"
   },
 };
 
@@ -56,15 +55,16 @@ export const DEX_URLS: Record<string, string> = {
   base: "https://app.uniswap.org/", astar: "https://app.arthswap.org/", sepolia: "https://app.uniswap.org/",
 };
 
+// ★修正: 標準の Uniswap V3 Router アドレスに変更
 export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; USDC: string }> = {
   sepolia: {
-    ROUTER: "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E", // SwapRouter02
-    WETH: "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", // Sepolia WETH
-    USDC: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia USDC
+    ROUTER: "0xE592427A0AEce92De3Edee1F18E0157C05861564", // SwapRouter (V3)
+    WETH: "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", // Wrapped ETH
+    USDC: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // USDC (Faucet)
   },
   mainnet: {
-    ROUTER: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", // SwapRouter02
-    WETH: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", // Mainnet WETH
-    USDC: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // Mainnet USDC
+    ROUTER: "0xE592427A0AEce92De3Edee1F18E0157C05861564", 
+    WETH: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", 
+    USDC: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 
   }
 };
