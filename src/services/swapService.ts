@@ -1,3 +1,5 @@
+// src/services/swapService.ts
+
 import { ethers } from 'ethers';
 import { UNISWAP_ADDRESSES } from '../constants';
 import { DEFAULT_NETWORKS } from '../constants';
@@ -5,24 +7,28 @@ import { DEFAULT_NETWORKS } from '../constants';
 const ERC20_ABI = [
   "function approve(address spender, uint256 amount) external returns (bool)",
   "function allowance(address owner, address spender) external view returns (uint256)",
-  "function decimals() external view returns (uint8)" // Decimals取得用に追加
+  "function decimals() external view returns (uint8)"
 ];
 
+// SwapRouter02 ABI (deadlineなし)
 const ROUTER_ABI = [
   "function exactInputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) external payable returns (uint256 amountOut)"
 ];
 
+// Fee Tiers to try: 0.05%, 0.3%, 1%
+const FEE_TIERS = [500, 3000, 10000];
+
 export const executeSwap = async (
   wallet: ethers.Wallet | ethers.HDNodeWallet,
   networkKey: string,
-  fromTokenAddress: string, // シンボルではなくアドレスを受け取る
-  toTokenAddress: string,   // シンボルではなくアドレスを受け取る
+  fromTokenAddress: string,
+  toTokenAddress: string,
   amount: string,
-  isNativeFrom: boolean     // Native(ETH)からのスワップかどうかのフラグ
+  isNativeFrom: boolean
 ) => {
   const addresses = UNISWAP_ADDRESSES[networkKey];
   if (!addresses) {
-    throw new Error(`Real swap not supported on ${networkKey}. Only Sepolia and Mainnet are supported.`);
+    throw new Error(`Real swap not supported on ${networkKey}.`);
   }
 
   const netConfig = DEFAULT_NETWORKS[networkKey];
@@ -33,70 +39,95 @@ export const executeSwap = async (
   // 1. Decimalsの解決とAmount計算
   let decimals = 18;
   if (!isNativeFrom) {
-    // Native以外ならコントラクトから桁数を取得
     try {
         const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, connectedWallet);
         decimals = await tokenContract.decimals();
     } catch (e) {
         console.warn("Failed to fetch decimals, defaulting to 18", e);
-        // USDC等の既知トークンはハードコードで救済しても良いが、基本は取得する
         if(fromTokenAddress.toLowerCase() === addresses.USDC?.toLowerCase()) decimals = 6;
     }
   }
-  
+
   const amountIn = ethers.parseUnits(amount, decimals);
 
-  console.log(`Preparing Swap on ${networkKey}`);
-  console.log(`From: ${fromTokenAddress} (Native: ${isNativeFrom})`);
-  console.log(`To: ${toTokenAddress}`);
-  console.log(`Amount: ${amount} (Raw: ${amountIn}, Decimals: ${decimals})`);
+  console.log(`Preparing Swap on ${networkKey}: ${amount} (raw: ${amountIn})`);
 
   // 2. Approve処理 (Native以外の場合)
   if (!isNativeFrom) {
     console.log("Checking Allowance...");
     const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, connectedWallet);
     const currentAllowance = await tokenContract.allowance(wallet.address, addresses.ROUTER);
-    
+
     if (currentAllowance < amountIn) {
       console.log("Approving Token...");
       const txApprove = await tokenContract.approve(addresses.ROUTER, ethers.MaxUint256);
       await txApprove.wait();
       console.log("Approve Confirmed.");
-    } else {
-      console.log("Allowance sufficient.");
     }
   }
 
-  // 3. スワップパラメータ作成
-  // Nativeから送る場合は WETHのアドレスを tokenIn に設定
+  // 3. パラメータ準備
   const actualTokenIn = isNativeFrom ? addresses.WETH : fromTokenAddress;
-  // Nativeへ送る場合(受取)は WETHのアドレスを tokenOut に設定 (Router仕様)
-  // ※受取側がETH希望でもUniswap V3はWETHで出力します。Unwrapは別途必要ですが今回は省略(WETH受取)
   const isNativeTo = toTokenAddress === "NATIVE" || toTokenAddress === ethers.ZeroAddress;
   const actualTokenOut = isNativeTo ? addresses.WETH : toTokenAddress;
 
-  const params = {
+  // 基本パラメータ
+  const paramsBase = {
     tokenIn: actualTokenIn,
     tokenOut: actualTokenOut,
-    fee: 3000, 
+    fee: 3000, // 初期値（後で上書き）
     recipient: wallet.address,
     amountIn: amountIn,
     amountOutMinimum: 0,
     sqrtPriceLimitX96: 0
   };
 
-  console.log("Executing Swap Transaction...", params);
+  // 4. 最適なPool(Fee Tier)をスキャン
+  // staticCallを使ってシミュレーションし、成功する最もアウトプットが多いFeeを探す
+  let bestFee = 3000;
+  let maxOut = BigInt(0);
+  let feeFound = false;
 
-  const tx = await router.exactInputSingle(params, { 
+  console.log("Scanning liquidity pools...");
+  for (const fee of FEE_TIERS) {
+      const tryParams = { ...paramsBase, fee };
+      try {
+          // staticCall: トランザクションを投げずに結果をシミュレーション
+          // Nativeの場合は value を設定してコール
+          const out = await router.exactInputSingle.staticCall(tryParams, {
+             value: isNativeFrom ? amountIn : 0
+          });
+          console.log(`Fee ${fee} -> Out: ${out}`);
+
+          if (out > maxOut) {
+              maxOut = out;
+              bestFee = fee;
+              feeFound = true;
+          }
+      } catch (e) {
+          // console.warn(`Fee ${fee} failed or no liquidity.`);
+      }
+  }
+
+  if (!feeFound) {
+      throw new Error("有効な流動性プールが見つかりませんでした (Try: 0.05%, 0.3%, 1%)。ペアが存在しない可能性があります。");
+  }
+
+  console.log(`Selected Best Fee: ${bestFee}`);
+  paramsBase.fee = bestFee;
+
+  // 5. 実行
+  console.log("Executing Swap Transaction...");
+  const tx = await router.exactInputSingle(paramsBase, { 
     value: isNativeFrom ? amountIn : 0, 
-    gasLimit: 300000 
+    gasLimit: 500000 // ガスリミットを少し余裕を持たせる
   });
 
   console.log("Tx Sent:", tx.hash);
   const receipt = await tx.wait();
   
   if (receipt.status === 0) {
-    throw new Error("Swap Transaction Reverted (Failed)");
+    throw new Error("Swap Transaction Reverted (On-chain failure)");
   }
 
   return tx;

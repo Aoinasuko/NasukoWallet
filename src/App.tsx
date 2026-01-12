@@ -55,7 +55,7 @@ function App() {
     const nfts = await fetchNfts(wallet.address, networkKey);
     setNftList(nfts);
     setIsAssetLoading(false);
-  }, [wallet?.address, networkKey, allNetworks]); // ★修正: wallet全体ではなくaddressに依存させる
+  }, [wallet?.address, networkKey, allNetworks]);
 
   // 資産ロード
   useEffect(() => {
@@ -93,7 +93,7 @@ function App() {
       } catch (e) { console.error("History sync failed", e); }
     };
     if (wallet) loadHistory();
-  }, [wallet?.address, networkKey, view]); // ★修正: ここもwallet.addressにする
+  }, [wallet?.address, networkKey, view]);
 
   // --- Functions ---
   const checkLoginStatus = async () => {
@@ -139,7 +139,6 @@ function App() {
     try { 
       const provider = new ethers.JsonRpcProvider(targetRpc); 
       const connected = targetWallet.connect(provider); 
-      // setWallet(connected); // ★重要: これが無限ループの原因だったので削除（または必要な時だけ呼ぶようにするべきだが、balance更新だけなら不要）
       const bal = await provider.getBalance(connected.address); 
       setBalance(ethers.formatEther(bal)); 
     } catch (e) { setBalance('0'); }
@@ -187,7 +186,8 @@ function App() {
         txHistory={txHistory} 
         tokenList={tokenList}
         setView={setView} 
-        onSwap={handleTxComplete} 
+        onSwap={handleTxComplete}
+        currentPrice={currentPrice} // ★追加: 損益計算用にメイン通貨価格を渡す
       />
     );
     if (view === 'settings_account') return <SettingsAccountView privateKey={wallet.privateKey} setView={setView} />;
