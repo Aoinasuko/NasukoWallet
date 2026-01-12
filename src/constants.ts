@@ -87,30 +87,29 @@ export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; U
   // 他チェーンも Router02 は 0x68b3... が一般的
 };
 
-// ★追加: 主要トークンリスト
-export const MAJOR_TOKENS_LIST: Record<string, { symbol: string; address: string; name: string }[]> = {
+// ★修正: CoinGecko ID を追加
+export const MAJOR_TOKENS_LIST: Record<string, { symbol: string; address: string; name: string; coingeckoId?: string }[]> = {
   mainnet: [
-    { symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', name: 'USD Coin' },
-    { symbol: 'USDT', address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', name: 'Tether USD' },
-    { symbol: 'DAI', address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', name: 'Dai Stablecoin' },
-    { symbol: 'WBTC', address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', name: 'Wrapped BTC' },
-    { symbol: 'POL', address: '0x455e53CBB86018Ac83880C351181737001F9392c', name: 'Polygon Ecosystem Token' },
-    { symbol: 'MATIC', address: '0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0', name: 'Polygon (Old)' },
-    { symbol: 'UNI', address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', name: 'Uniswap' },
-    { symbol: 'LINK', address: '0x514910771AF9Ca656af840dff83E8264EcF986CA', name: 'Chainlink' },
-    { symbol: 'AAVE', address: '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9', name: 'Aave' },
-    { symbol: 'PEPE', address: '0x6982508145454Ce325dDbE47a25d4ec3d2311933', name: 'Pepe' },
-    { symbol: 'SHIB', address: '0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE', name: 'Shiba Inu' },
+    { symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', name: 'USD Coin', coingeckoId: 'usd-coin' },
+    { symbol: 'USDT', address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', name: 'Tether USD', coingeckoId: 'tether' },
+    { symbol: 'DAI', address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', name: 'Dai Stablecoin', coingeckoId: 'dai' },
+    { symbol: 'WBTC', address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', name: 'Wrapped BTC', coingeckoId: 'wrapped-bitcoin' },
+    { symbol: 'POL', address: '0x455e53CBB86018Ac83880C351181737001F9392c', name: 'Polygon Ecosystem Token', coingeckoId: 'polygon-ecosystem-token' },
+    { symbol: 'MATIC', address: '0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0', name: 'Polygon (Old)', coingeckoId: 'matic-network' },
+    { symbol: 'UNI', address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', name: 'Uniswap', coingeckoId: 'uniswap' },
+    { symbol: 'LINK', address: '0x514910771AF9Ca656af840dff83E8264EcF986CA', name: 'Chainlink', coingeckoId: 'chainlink' },
+    { symbol: 'AAVE', address: '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9', name: 'Aave', coingeckoId: 'aave' },
+    { symbol: 'PEPE', address: '0x6982508145454Ce325dDbE47a25d4ec3d2311933', name: 'Pepe', coingeckoId: 'pepe' },
+    { symbol: 'SHIB', address: '0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE', name: 'Shiba Inu', coingeckoId: 'shiba-inu' },
   ],
   polygon: [
-    { symbol: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', name: 'USD Coin (Native)' },
-    { symbol: 'USDT', address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', name: 'Tether USD' },
-    { symbol: 'WETH', address: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', name: 'Wrapped Ether' },
-    { symbol: 'WBTC', address: '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6', name: 'Wrapped BTC' },
+    { symbol: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', name: 'USD Coin (Native)', coingeckoId: 'usd-coin' },
+    { symbol: 'USDT', address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', name: 'Tether USD', coingeckoId: 'tether' },
+    { symbol: 'WETH', address: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', name: 'Wrapped Ether', coingeckoId: 'ethereum' },
+    { symbol: 'WBTC', address: '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6', name: 'Wrapped BTC', coingeckoId: 'wrapped-bitcoin' },
   ],
   sepolia: [
-    { symbol: 'USDC', address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', name: 'USD Coin (Testnet)' },
-    { symbol: 'UNI', address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', name: 'Uniswap' }, // May vary
+    { symbol: 'USDC', address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', name: 'USD Coin (Testnet)', coingeckoId: 'usd-coin' },
+    { symbol: 'UNI', address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', name: 'Uniswap', coingeckoId: 'uniswap' }, 
   ],
-  // 他のネットワークはデフォルト空配列
 };

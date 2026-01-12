@@ -1,12 +1,10 @@
-// src/components/views/SwapView.tsx
-
 import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { Wrapper } from '../Layout';
 import { GlassCard, Button, Input } from '../UI';
 import { executeSwap } from '../../services/swapService';
 import { fetchTokenMetadataAndPrice } from '../../alchemy';
-import { fetchHistoricalPrice } from '../../services/priceService'; // 追加された関数をインポート
+import { fetchHistoricalPrice } from '../../services/priceService';
 import { MAJOR_TOKENS_LIST } from '../../constants';
 import type { TxHistory, TokenData } from '../../types';
 
@@ -18,16 +16,13 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
   const [loading, setLoading] = useState(false);
 
   // --- State ---
-  // From: Native か TokenData
   const [fromType, setFromType] = useState<'native' | 'token'>('native');
   const [selectedFromToken, setSelectedFromToken] = useState<TokenData | null>(null);
 
-  // To: 選択モード or 入力モード
-  const [toInput, setToInput] = useState<string>(''); // アドレス入力用
-  const [searchedToken, setSearchedToken] = useState<any>(null); // 検索されたトークン情報
+  const [toInput, setToInput] = useState<string>(''); 
+  const [searchedToken, setSearchedToken] = useState<any>(null); 
   const [isSearching, setIsSearching] = useState(false);
 
-  // 損益表示用データ
   const [comparisonData, setComparisonData] = useState<{
     diffValueMain: string;
     diffValueJpy: string;
@@ -35,7 +30,7 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     profitPercent: string;
     profitColor: string;
     prevRateStr: string;
-    isPrediction?: boolean; // 予測フラグ
+    isPrediction?: boolean;
   } | null>(null);
 
   const [amount, setAmount] = useState<string>('0');
@@ -43,12 +38,9 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
   const [estimatedFee, setEstimatedFee] = useState('0');
 
   const net = allNetworks[networkKey];
-  // const addresses = UNISWAP_ADDRESSES[networkKey]; // 必要に応じて使用
-
-  // 主要トークンリストを取得 (現在のネットワーク用)
   const majorTokens = MAJOR_TOKENS_LIST[networkKey] || [];
 
-  // 1. Balance Update
+// 1. Balance Update
   useEffect(() => {
     const updateBalance = async () => {
       if (fromType === 'native') {
@@ -62,27 +54,23 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     updateBalance();
   }, [fromType, selectedFromToken, networkKey, wallet.address, net.rpc]);
 
-  // 2. Custom Token Search Logic
+  // 2. Token Search
   useEffect(() => {
     const searchToken = async () => {
-      // 入力がアドレス形式でなければスキップ
       if (!ethers.isAddress(toInput)) {
         setSearchedToken(null);
         return;
       }
-
       setIsSearching(true);
       const info = await fetchTokenMetadataAndPrice(toInput, networkKey);
       setSearchedToken(info);
       setIsSearching(false);
     };
-
-    const timer = setTimeout(searchToken, 500); // 入力停止0.5秒後に検索
+    const timer = setTimeout(searchToken, 500);
     return () => clearTimeout(timer);
   }, [toInput, networkKey]);
 
-
-  // Helper: トークン選択 (From)
+  // Handlers
   const handleSelectFrom = (e: any) => {
     const val = e.target.value;
     if (val === 'NATIVE') {
@@ -97,35 +85,17 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     }
   };
 
-  // Helper: トークン選択 (To) - ドロップダウン用
   const handleSelectTo = (e: any) => {
     const val = e.target.value;
-    // 「カスタム」などを選んだ場合は何もしない、またはクリア
     if (val === 'custom') return;
     setToInput(val);
   };
 
-  // ドロップダウン用のトークンリスト作成 (主要 + 所持)
   const availableToTokens = [
-    // 主要トークン
-    ...majorTokens.map(t => ({
-      symbol: t.symbol,
-      address: t.address,
-      name: t.name,
-      type: 'Major'
-    })),
-    // 所持トークン
-    ...tokenList.map((t: TokenData) => ({
-      symbol: t.symbol,
-      address: t.address,
-      name: t.name,
-      type: 'Held'
-    }))
+    ...majorTokens.map(t => ({ symbol: t.symbol, address: t.address, name: t.name, type: 'Major' })),
+    ...tokenList.map((t: TokenData) => ({ symbol: t.symbol, address: t.address, name: t.name, type: 'Held' }))
   ];
-
-  // 重複排除 (アドレスの小文字化で比較)
   const uniqueToTokens = Array.from(new Map(availableToTokens.map((item: any) => [item.address.toLowerCase(), item])).values());
-
 
   const handleProceed = async () => {
     if (!amount || parseFloat(amount) <= 0) return alert("金額を入力してください");
@@ -138,7 +108,6 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
       const fee = (feeData.gasPrice || BigInt(0)) * BigInt(200000);
       setEstimatedFee(ethers.formatEther(fee));
 
-      // 損益計算 (非同期待機)
       await calculateComparison();
 
       setStep('confirm');
@@ -146,7 +115,7 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     setLoading(false);
   };
 
-  // 損益計算ロジック
+  // ★修正: 損益計算ロジック
   const calculateComparison = async () => {
     if (!searchedToken) return;
 
@@ -154,21 +123,37 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     const toSym = searchedToken.symbol;
     const inputAmt = parseFloat(amount);
 
-    // 今回のレート推定 (1 From = X To)
     const fromPriceUsd = fromType === 'native' ? (currentPrice?.usd || 0) : (selectedFromToken?.market?.usd.price || 0);
     const toPriceUsd = searchedToken.price?.usd || 0;
 
-    let currentRate = 0; // 1 From = ? To
+    // FromトークンのCoinGecko ID特定
+    let fromCoingeckoId: string | null = null;
+    if (fromType === 'native') {
+        fromCoingeckoId = net.coingeckoId;
+    } else if (selectedFromToken) {
+        // 主要トークンリストから検索
+        const found = majorTokens.find(t => t.address.toLowerCase() === selectedFromToken.address.toLowerCase());
+        if (found && found.coingeckoId) fromCoingeckoId = found.coingeckoId;
+    }
+
+    // ToトークンのCoinGecko ID特定
+    let toCoingeckoId: string | null = null;
+    if (searchedToken.symbol === net.symbol || searchedToken.symbol === `W${net.symbol}`) {
+        toCoingeckoId = net.coingeckoId;
+    } else {
+        const found = majorTokens.find(t => t.address.toLowerCase() === toInput.toLowerCase());
+        if (found && found.coingeckoId) toCoingeckoId = found.coingeckoId;
+    }
+
+    let currentRate = 0;
     if (toPriceUsd > 0 && fromPriceUsd > 0) {
       currentRate = fromPriceUsd / toPriceUsd;
     }
 
-    // 現在価値
     const currentValueUsd = inputAmt * fromPriceUsd;
     const currentValueJpy = inputAmt * (fromType === 'native' ? (currentPrice?.jpy || 0) : (selectedFromToken?.market?.jpy.price || 0));
 
     // 履歴検索 (逆方向: Profit/Lossチェック用)
-    // 例: 今回 ETH -> USDC なら、前回 USDC -> ETH を探す
     const pairSymbolReverse = `${toSym} > ${fromSym}`;
     const prevTxReverse = txHistory.find((tx: TxHistory) => tx.type === 'swap' && tx.symbol === pairSymbolReverse);
 
@@ -180,7 +165,6 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     if (prevTxReverse) {
       if (prevTxReverse.exchangeRate) {
         // A. 正確なレートデータがある場合
-        // 前回のレート(1 To = X From)の逆数 = 1 From = Y To (取得コスト)
         const prevCostRate = 1 / prevTxReverse.exchangeRate;
         const diff = (currentRate - prevCostRate) / prevCostRate * 100;
         profitPercentStr = (diff > 0 ? "+" : "") + diff.toFixed(2) + "%";
@@ -192,34 +176,53 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
         isPrediction = true;
         prevRateStr = "Est. from History";
 
-        // パターン1: 両方ステーブルコイン (USDC <> USDT)
+        // ステーブルコイン判定
         const isFromStable = STABLE_COINS.some(s => fromSym.includes(s));
         const isToStable = STABLE_COINS.some(s => toSym.includes(s));
 
+        // パターン1: 両方ステーブルコイン (USDC <> USDT)
         if (isFromStable && isToStable) {
-          // ステーブル同士はほぼ1:1とみなす
           profitPercentStr = "≈ 0.00%";
           profitColor = "text-slate-400";
           prevRateStr = "Est. (Stable Peg)";
         }
-        // パターン2: Nativeトークンが絡む場合 (ETH <> USDC 等)
-        // 以前 Nativeを買った -> 今 Nativeを売る
-        // 当時のNative価格を取得して比較する
-        else if (fromType === 'native' && net.coingeckoId) {
-          const histPrice = await fetchHistoricalPrice(net.coingeckoId, prevTxReverse.date);
-          if (histPrice) {
-            // 当時のNative価格($) vs 現在のNative価格($) で損益率を概算
-            const diff = (fromPriceUsd - histPrice) / histPrice * 100;
-            profitPercentStr = (diff > 0 ? "+" : "") + diff.toFixed(2) + "%";
-            profitColor = diff > 0 ? "text-green-400" : "text-red-400";
-            prevRateStr = `Est. Price: $${histPrice.toFixed(2)}`;
-          } else {
-            prevRateStr = "Old data (Fetch Failed)";
-          }
+
+        // パターン2: 変動資産(Crypto) を売る場合 (PEPE -> USDC)
+        // 以前買った(USDC->PEPE) -> 今売る(PEPE->USDC)
+        // 比較: 「買った時のPEPE価格」 vs 「今のPEPE価格」
+        // 条件: 今回のFrom(PEPE)のIDがわかっていること
+        else if (fromCoingeckoId) {
+            const histPrice = await fetchHistoricalPrice(fromCoingeckoId, prevTxReverse.date);
+            if (histPrice) {
+                // (今の価格 - 昔の価格) / 昔の価格
+                const diff = (fromPriceUsd - histPrice) / histPrice * 100;
+                profitPercentStr = (diff > 0 ? "+" : "") + diff.toFixed(2) + "%";
+                profitColor = diff > 0 ? "text-green-400" : "text-red-400";
+                prevRateStr = `Est. Buy Price: $${histPrice.toFixed(6)}`; // PEPEなど単価安い場合考慮して桁数多め
+            } else {
+                prevRateStr = "Old data (Fetch Failed)";
+            }
+        }
+
+        // パターン3: 変動資産(Crypto) を買う場合 (USDC -> PEPE)
+        // 以前売った(PEPE->USDC) -> 今買い戻す(USDC->PEPE)
+        // 比較: 「売った時のPEPE価格」 vs 「今のPEPE価格」
+        // 安く買い戻せれば利益
+        // 条件: 今回のTo(PEPE)のIDがわかっていること
+        else if (toCoingeckoId) {
+            const histPrice = await fetchHistoricalPrice(toCoingeckoId, prevTxReverse.date);
+            if (histPrice) {
+                // (昔売った価格 - 今買う価格) / 今買う価格
+                const diff = (histPrice - toPriceUsd) / toPriceUsd * 100;
+                profitPercentStr = (diff > 0 ? "+" : "") + diff.toFixed(2) + "%";
+                profitColor = diff > 0 ? "text-green-400" : "text-red-400";
+                prevRateStr = `Est. Sold Price: $${histPrice.toFixed(6)}`;
+            } else {
+                prevRateStr = "Old data (Fetch Failed)";
+            }
         }
         else {
-          // その他のトークン同士でID不明な場合は予測不可
-          prevRateStr = "Old data (No rate)";
+          prevRateStr = "Old data (ID Unknown)";
         }
       }
     }
@@ -235,6 +238,8 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     });
   };
 
+  // ... (handleExecute などは変更なし)
+  // ... (Render部分も変更なし)
   const handleExecute = async () => {
     try {
       setLoading(true);
@@ -242,13 +247,11 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
       const toAddr = toInput;
       const isNative = fromType === 'native';
 
-      // サービスからtxとシミュレーション結果(amountOutRaw)を受け取る
       const { tx, amountOutRaw } = await executeSwap(wallet, networkKey, fromAddr, toAddr, amount, isNative);
 
       const fromSym = fromType === 'native' ? net.symbol : selectedFromToken!.symbol;
       const toSym = searchedToken ? searchedToken.symbol : "Unknown";
 
-      // レート計算 (1 From = ? To)
       const decimalsTo = searchedToken.decimals || 18;
       const amountOutVal = parseFloat(ethers.formatUnits(amountOutRaw, decimalsTo));
       const amountInVal = parseFloat(amount);
@@ -264,7 +267,6 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
         to: toSym,
         date: new Date().toLocaleString('ja-JP'),
         network: net.name,
-        // レート情報を保存 (次回以降のP/L計算に使用)
         receivedAmount: ethers.formatUnits(amountOutRaw, decimalsTo),
         exchangeRate: rate,
         priceInUsd: searchedToken.price?.usd || 0,
@@ -280,8 +282,6 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
       setLoading(false);
     }
   };
-
-  // --- Render ---
 
   if (step === 'input') {
     return (
@@ -343,7 +343,6 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
             />
           </div>
 
-          {/* 検索結果表示 */}
           <div className="mb-6 h-16">
             {isSearching && <div className="text-xs text-cyan-400 mt-1 animate-pulse">Searching info...</div>}
 
@@ -357,9 +356,7 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-xs text-white">
-                    Price:
-                  </div>
+                  <div className="text-xs text-white">Price:</div>
                   <div className="text-[10px] text-slate-400">
                     ${searchedToken.price.usd} / ¥{searchedToken.price.jpy}
                   </div>
@@ -376,7 +373,7 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     );
   }
 
-  // CONFIRM SECTION
+  // CONFIRM SECTION (そのまま)
   return (
     <Wrapper title="確認" backAction={() => setStep('input')}>
       <GlassCard>
