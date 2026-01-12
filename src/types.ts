@@ -26,6 +26,7 @@ export type StorageSession = {
   masterPass?: string;
 };
 
+// ★修正: P/L計算用のフィールドを追加
 export type TxHistory = {
   id: string;
   hash: string;
@@ -36,11 +37,10 @@ export type TxHistory = {
   to: string;
   date: string;
   network: string;
-  // ★追加: P/L計算用
-  swapRateToMain?: number; // Swap時のメイン通貨換算レート (1 Token = X MainCurrency)
-  priceInMain?: number;    // Swap時のメイン通貨換算価格 (Total Value in MainCurrency)
-  priceInUsd?: number;     // Swap時のUSD価格
-  priceInJpy?: number;     // Swap時のJPY価格
+  // 以下、追加フィールド (オプショナル)
+  swapRateToMain?: number; // メイン通貨とのレート
+  priceInUsd?: number;     // USD単価
+  priceInJpy?: number;     // JPY単価
 };
 
 export type HistoryCacheData = {
@@ -55,10 +55,10 @@ export type StorageLocal = {
   bgImage?: string;
   history?: TxHistory[]; 
   customNetworks?: Record<string, NetworkConfig>;
-  historyCache?: Record<string, HistoryCacheData>;
-  mainNetwork?: string;
+  historyCache?: Record<string, HistoryCacheData>; 
 };
 
+// ... (TokenData等は変更なし)
 export type MarketData = {
   price: number;
   change: number;

@@ -4,7 +4,7 @@ import type { TokenData, NftData, AlchemyHistory } from "./types";
 import { UNISWAP_ADDRESSES } from "./constants"; // ★追加: ルーターアドレス判定用
 
 // ★APIキーはそのまま
-const API_KEY = "XXXXX"; 
+const API_KEY = "ここにAPIキーを貼り付け"; 
 
 const NETWORK_MAP: Record<string, Network> = {
   mainnet: Network.ETH_MAINNET,
