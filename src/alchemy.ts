@@ -1,10 +1,10 @@
 import { Alchemy, Network, AssetTransfersCategory, SortingOrder } from "alchemy-sdk";
 import { ethers } from "ethers";
 import type { TokenData, NftData, AlchemyHistory } from "./types";
-import { UNISWAP_ADDRESSES } from "./constants"; // ★追加: ルーターアドレス判定用
+import { UNISWAP_ADDRESSES } from "./constants"; 
 
 // ★APIキーはそのまま
-const API_KEY = "ここにAPIキーを貼り付け"; 
+const API_KEY = "B4Dt5cTQ4Sp-8Dv81q-zi"; 
 
 const NETWORK_MAP: Record<string, Network> = {
   mainnet: Network.ETH_MAINNET,
@@ -25,23 +25,34 @@ const COINGECKO_PLATFORMS: Record<string, string> = {
   astar: "astar",
 };
 
-// ... fetchTokens, fetchNfts は変更なし ...
+// --- トークン一覧を取得する関数 (エラー回避・安定版) ---
 export const fetchTokens = async (address: string, networkKey: string): Promise<TokenData[]> => {
   const network = NETWORK_MAP[networkKey];
   if (!network) return [];
+
   const config = { apiKey: API_KEY, network };
   const alchemy = new Alchemy(config);
+
   try {
+    // ★修正: 特定のアドレス指定をやめ、シンプルな全件取得のみにする
+    // これにより "missing response" エラーを回避します
     const balances = await alchemy.core.getTokenBalances(address);
+    
     const tokens: TokenData[] = [];
     const contractAddresses: string[] = [];
+
     await Promise.all(
       balances.tokenBalances.map(async (token) => {
-        if (token.tokenBalance === "0") return;
+        // 残高0、または不正なデータはスキップ
+        if (!token.tokenBalance || token.tokenBalance === "0") return;
+        
         try {
           const metadata = await alchemy.core.getTokenMetadata(token.contractAddress);
-          const balanceFormatted = ethers.formatUnits(token.tokenBalance || "0", metadata.decimals || 18);
+          const balanceFormatted = ethers.formatUnits(token.tokenBalance, metadata.decimals || 18);
+          
+          // 0.0001以下など微小な残高はスキップ
           if (parseFloat(balanceFormatted) < 0.0001) return;
+
           tokens.push({
             name: metadata.name || "Unknown",
             symbol: metadata.symbol || "???",
@@ -50,16 +61,23 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
             address: token.contractAddress
           });
           contractAddresses.push(token.contractAddress);
-        } catch (e) { console.warn(e); }
+        } catch (e) { 
+          console.warn("Metadata fetch error for:", token.contractAddress); 
+        }
       })
     );
+
+    // CoinGeckoで価格取得 (変更なし)
     const platform = COINGECKO_PLATFORMS[networkKey];
     if (platform && contractAddresses.length > 0) {
       try {
         const addressesStr = contractAddresses.join(',');
         const url = `https://api.coingecko.com/api/v3/simple/token_price/${platform}?contract_addresses=${addressesStr}&vs_currencies=usd,jpy&include_24hr_change=true`;
+        
         const res = await fetch(url);
-        const priceData = await res.json();
+        // エラーでも空オブジェクトを返して続行させる
+        const priceData = res.ok ? await res.json() : {};
+
         tokens.forEach(token => {
           const data = priceData[token.address.toLowerCase()];
           if (data) {
@@ -69,12 +87,19 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
             };
           }
         });
-      } catch (e) { console.warn("Price fetch failed:", e); }
+      } catch (e) { 
+        console.warn("Price fetch failed:", e); 
+      }
     }
     return tokens;
-  } catch (error) { console.error("Alchemy Token Error:", error); return []; }
+  } catch (error) {
+    // 致命的なエラーでも、空配列を返してアプリをクラッシュさせない
+    console.error("Alchemy Token Error:", error);
+    return [];
+  }
 };
 
+// ... (fetchNfts, fetchTransactionHistory は変更なし) ...
 export const fetchNfts = async (address: string, networkKey: string): Promise<NftData[]> => {
   const network = NETWORK_MAP[networkKey];
   if (!network) return [];
@@ -90,37 +115,24 @@ export const fetchNfts = async (address: string, networkKey: string): Promise<Nf
   } catch (error) { console.error(error); return []; }
 };
 
-// --- ★修正: 履歴取得 (スワップ結合ロジック) ---
 export const fetchTransactionHistory = async (address: string, networkKey: string): Promise<AlchemyHistory[]> => {
   const network = NETWORK_MAP[networkKey];
   if (!network) return [];
-
   const config = { apiKey: API_KEY, network };
   const alchemy = new Alchemy(config);
   const myAddr = address.toLowerCase();
-
-  // ルーターアドレスの取得 (判定用)
   const routerAddr = UNISWAP_ADDRESSES[networkKey]?.ROUTER?.toLowerCase();
 
   try {
     const options = {
-      fromBlock: "0x0",
-      category: [AssetTransfersCategory.EXTERNAL, AssetTransfersCategory.ERC20],
-      excludeZeroValue: true,
-      order: SortingOrder.DESCENDING,
-      maxCount: 100, // マージするために多めに取得
-      withMetadata: true,
+      fromBlock: "0x0", category: [AssetTransfersCategory.EXTERNAL, AssetTransfersCategory.ERC20], excludeZeroValue: true, order: SortingOrder.DESCENDING, maxCount: 100, withMetadata: true,
     };
-
-    // 送信と受信を一括取得
     const [incoming, outgoing] = await Promise.all([
       alchemy.core.getAssetTransfers({ ...options, toAddress: address }),
       alchemy.core.getAssetTransfers({ ...options, fromAddress: address })
     ]);
 
-    // 1. ハッシュごとにグループ化
     const txMap: Record<string, { sent: any[], received: any[], date: string }> = {};
-
     const addToMap = (tx: any, type: 'sent' | 'received') => {
       if (!txMap[tx.hash]) {
         let date = "Pending";
@@ -132,88 +144,35 @@ export const fetchTransactionHistory = async (address: string, networkKey: strin
       }
       txMap[tx.hash][type].push(tx);
     };
-
     outgoing.transfers.forEach(tx => addToMap(tx, 'sent'));
     incoming.transfers.forEach(tx => addToMap(tx, 'received'));
 
-    // 2. グループごとに判定して履歴データを生成
     const history: AlchemyHistory[] = [];
-
     Object.entries(txMap).forEach(([hash, data]) => {
       const { sent, received, date } = data;
-
-      // A. スワップ判定: 「送信」と「受信」が両方ある OR 送信先がルーター
-      // (テストネットだと受信イベントのインデックスが遅れることがあるため、ルーター宛ならスワップとみなす)
       const isSwapToRouter = sent.some(tx => tx.to && tx.to.toLowerCase() === routerAddr);
       const isSwap = (sent.length > 0 && received.length > 0) || isSwapToRouter;
 
       if (isSwap) {
-        // スワップとして登録
         const sentAsset = sent[0];
-        const receivedAsset = received[0]; // ない場合はundefined
-
+        const receivedAsset = received[0];
         const sentSymbol = sentAsset ? sentAsset.asset : "???";
         const recvSymbol = receivedAsset ? receivedAsset.asset : (isSwapToRouter ? "Token" : "???");
-        
         const sentAmount = sentAsset ? sentAsset.value?.toFixed(4) : "0";
-        // const recvAmount = receivedAsset ? receivedAsset.value?.toFixed(4) : "?";
-
-        history.push({
-          id: hash,
-          hash: hash,
-          type: 'swap', // ★タイプをswapに
-          amount: sentAmount, // とりあえず送信額を表示
-          symbol: `${sentSymbol} > ${recvSymbol}`, // シンボルを「ETH > USDC」のように結合
-          from: myAddr, // 自分のアドレスにしておく(フィルタ用)
-          to: myAddr,
-          date: date,
-          network: networkKey,
-        });
-
+        history.push({ id: hash, hash: hash, type: 'swap', amount: sentAmount, symbol: `${sentSymbol} > ${recvSymbol}`, from: myAddr, to: myAddr, date: date, network: networkKey });
       } else {
-        // B. 通常の送金・入金
         if (sent.length > 0) {
-          sent.forEach(tx => {
-            history.push({
-              id: tx.uniqueId,
-              hash: tx.hash,
-              type: 'send',
-              amount: tx.value?.toFixed(4) || "0",
-              symbol: tx.asset || "ETH",
-              from: tx.from,
-              to: tx.to,
-              date: date,
-              network: networkKey,
-            });
-          });
+          sent.forEach(tx => { history.push({ id: tx.uniqueId, hash: tx.hash, type: 'send', amount: tx.value?.toFixed(4) || "0", symbol: tx.asset || "ETH", from: tx.from, to: tx.to, date: date, network: networkKey }); });
         }
         if (received.length > 0) {
-          received.forEach(tx => {
-            history.push({
-              id: tx.uniqueId,
-              hash: tx.hash,
-              type: 'receive',
-              amount: tx.value?.toFixed(4) || "0",
-              symbol: tx.asset || "ETH",
-              from: tx.from,
-              to: tx.to,
-              date: date,
-              network: networkKey,
-            });
-          });
+          received.forEach(tx => { history.push({ id: tx.uniqueId, hash: tx.hash, type: 'receive', amount: tx.value?.toFixed(4) || "0", symbol: tx.asset || "ETH", from: tx.from, to: tx.to, date: date, network: networkKey }); });
         }
       }
     });
-
-    // 日付順にソートして50件返す
     return history.sort((a, b) => {
         if (a.date === "Pending") return -1;
         if (b.date === "Pending") return 1;
         return b.date.localeCompare(a.date);
       }).slice(0, 50);
-
-  } catch (error) {
-    console.error("Alchemy History Error:", error);
-    return [];
-  }
+  } catch (error) { console.error("Alchemy History Error:", error); return []; }
 };

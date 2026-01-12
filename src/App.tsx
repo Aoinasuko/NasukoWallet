@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { encryptData, decryptData, verifyTotp } from './cryptoUtils';
 import './App.css'; 
@@ -7,17 +7,13 @@ import { DEFAULT_NETWORKS } from './constants';
 import type { SavedAccount, VaultData, StorageSession, StorageLocal, TxHistory, NetworkConfig, TokenData, NftData, AlchemyHistory } from './types';
 import { fetchTokens, fetchNfts, fetchTransactionHistory } from './alchemy';
 
-// 分割したコンポーネントをインポート
 import { WelcomeView, Setup2FAView, LoginView } from './components/views/Auth';
 import { HomeView } from './components/views/HomeView';
 import { SendView } from './components/views/SendView';
 import { HistoryView } from './components/views/HistoryView';
 import { AccountListView, ImportView } from './components/views/Accounts';
 import { SettingsMenuView, SettingsAccountView, SettingsGeneralView, SettingsNetworkListView, SettingsNetworkAddView } from './components/views/Settings';
-
-// ★修正1: ReceiveViewのみActionsから読み込む
 import { ReceiveView } from './components/views/Actions';
-// ★修正2: SwapViewは、あなたが作った高機能版ファイルを読み込む
 import { SwapView } from './components/views/SwapView';
 
 function App() {
@@ -46,19 +42,27 @@ function App() {
 
   useEffect(() => { checkLoginStatus(); }, []);
 
-  useEffect(() => {
-    const loadAssets = async () => {
-      if (!wallet) return;
-      setIsAssetLoading(true);
-      const tokens = await fetchTokens(wallet.address, networkKey);
-      setTokenList(tokens);
-      const nfts = await fetchNfts(wallet.address, networkKey);
-      setNftList(nfts);
-      setIsAssetLoading(false);
-    };
-    loadAssets();
-  }, [wallet, networkKey]);
+  // loadAssetsの定義
+  const loadAssets = useCallback(async () => {
+    if (!wallet) return;
+    setIsAssetLoading(true);
+    // 残高更新
+    updateBalance(wallet, allNetworks[networkKey].rpc);
+    
+    // トークン・NFT取得
+    const tokens = await fetchTokens(wallet.address, networkKey);
+    setTokenList(tokens);
+    const nfts = await fetchNfts(wallet.address, networkKey);
+    setNftList(nfts);
+    setIsAssetLoading(false);
+  }, [wallet?.address, networkKey, allNetworks]); // ★修正: wallet全体ではなくaddressに依存させる
 
+  // 資産ロード
+  useEffect(() => {
+    loadAssets();
+  }, [loadAssets]);
+
+  // 履歴ロード
   useEffect(() => {
     const loadHistory = async () => {
       if (!wallet) return;
@@ -67,6 +71,7 @@ function App() {
       const local = await chrome.storage.local.get(['historyCache']) as StorageLocal;
       const cache = local.historyCache?.[cacheKey];
       
+      // キャッシュ表示
       if (cache && cache.data.length > 0) {
         setTxHistory(cache.data);
         setHistoryLastUpdated(new Date(cache.lastUpdated).toLocaleString());
@@ -74,6 +79,7 @@ function App() {
         setTxHistory([]);
       }
 
+      // API取得
       try {
         const history = await fetchTransactionHistory(wallet.address, networkKey);
         const formattedHistory: TxHistory[] = history.map((h: AlchemyHistory) => ({
@@ -87,25 +93,20 @@ function App() {
       } catch (e) { console.error("History sync failed", e); }
     };
     if (wallet) loadHistory();
-  }, [wallet, networkKey, view]);
+  }, [wallet?.address, networkKey, view]); // ★修正: ここもwallet.addressにする
 
+  // --- Functions ---
   const checkLoginStatus = async () => {
     const session = await chrome.storage.session.get(['masterPass']) as StorageSession;
     const local = await chrome.storage.local.get(['vault', 'accounts', 'network', 'bgImage', 'customNetworks']) as StorageLocal;
-    
     if (local.accounts) setSavedAccounts(local.accounts);
     let merged = { ...DEFAULT_NETWORKS, ...(local.customNetworks || {}) };
     setAllNetworks(merged);
     const net = (local.network && merged[local.network]) ? local.network : 'sepolia';
     setNetworkKey(net);
     if (local.bgImage) setBgImage(local.bgImage);
-
     if (!local.vault) setView('setup');
-    else if (session.masterPass) { 
-      setSessionMasterPass(session.masterPass); 
-      setView('list'); 
-      fetchPrice(merged[net]); 
-    }
+    else if (session.masterPass) { setSessionMasterPass(session.masterPass); setView('list'); fetchPrice(merged[net]); } 
     else setView('login');
   };
 
@@ -126,16 +127,8 @@ function App() {
     try { 
       let data = await tryFetch(targetId); 
       if (targetId === "polygon-ecosystem-token" && (!data || !data[targetId])) { data = await tryFetch("matic-network"); } 
-      
       const res = data[targetId] || data["matic-network"];
-      if(res) {
-        setCurrentPrice({ 
-          usd: res.usd, 
-          jpy: res.jpy,
-          usdChange: res.usd_24h_change || 0,
-          jpyChange: res.jpy_24h_change || 0
-        });
-      }
+      if(res) { setCurrentPrice({ usd: res.usd, jpy: res.jpy, usdChange: res.usd_24h_change || 0, jpyChange: res.jpy_24h_change || 0 }); }
     } catch(e) { /* ignore */ }
   };
 
@@ -143,43 +136,38 @@ function App() {
     const targetWallet = w || wallet;
     const targetRpc = rpcUrl || allNetworks[networkKey].rpc;
     if(!targetWallet) return;
-    try { const provider = new ethers.JsonRpcProvider(targetRpc); const connected = targetWallet.connect(provider); setWallet(connected); const bal = await provider.getBalance(connected.address); setBalance(ethers.formatEther(bal)); } catch (e) { setBalance('0'); }
+    try { 
+      const provider = new ethers.JsonRpcProvider(targetRpc); 
+      const connected = targetWallet.connect(provider); 
+      // setWallet(connected); // ★重要: これが無限ループの原因だったので削除（または必要な時だけ呼ぶようにするべきだが、balance更新だけなら不要）
+      const bal = await provider.getBalance(connected.address); 
+      setBalance(ethers.formatEther(bal)); 
+    } catch (e) { setBalance('0'); }
   };
 
-  // Auth Handlers
+  // Handlers
   const handleStartSetup = (pass: string, secret: any, qr: string) => { setMasterPass(pass); setTempSecret(secret); setQrDataUrl(qr); setView('2fa_setup'); };
   const handleFinishSetup = async (code: string) => { if (!verifyTotp(code, tempSecret.base32 || tempSecret)) return alert("コードが違います"); const v: VaultData = { totpSecret: tempSecret.base32 || tempSecret, isSetupComplete: true }; await chrome.storage.local.set({ vault: encryptData(v, masterPass) }); await chrome.storage.session.set({ masterPass }); setSessionMasterPass(masterPass); setView('list'); };
   const handleLogin = async (pass: string, code: string) => { setLoading(true); try { const local = await chrome.storage.local.get(['vault']) as StorageLocal; const v = decryptData(local.vault!, pass) as VaultData; if (!v || !verifyTotp(code, v.totpSecret)) throw new Error(); await chrome.storage.session.set({ masterPass: pass }); setSessionMasterPass(pass); setView('list'); fetchPrice(allNetworks[networkKey]); } catch { alert("認証に失敗しました"); } finally { setLoading(false); } };
-
-  // Account Handlers
-  const handleUnlockAccount = async (acc: SavedAccount) => { setLoading(true); try { const pass = decryptData(acc.encryptedPassword, sessionMasterPass); const w = await ethers.Wallet.fromEncryptedJson(acc.encryptedJson, pass); chrome.runtime.sendMessage({ type: "WALLET_UNLOCKED", address: w.address }); updateBalance(w, allNetworks[networkKey].rpc); setView('home'); } catch { alert("解除に失敗しました"); } finally { setLoading(false); } };
-  const handleImport = async (type: 'json'|'privateKey', val: string, pass: string, name: string) => { try { let w, j; if (type === 'json') { w = await ethers.Wallet.fromEncryptedJson(val, pass); j = val; } else { w = new ethers.Wallet(val.startsWith('0x') ? val : '0x' + val); j = await w.encrypt(pass); } if (savedAccounts.find(a => a.address === w.address)) return alert("既に登録されています"); const ep = encryptData(pass, sessionMasterPass); const n = [...savedAccounts, { name, address: w.address, encryptedJson: j, encryptedPassword: ep }]; setSavedAccounts(n); await chrome.storage.local.set({ accounts: n }); setView('list'); } catch { alert("インポート失敗: パスワードか鍵が間違っています"); } };
+  const handleUnlockAccount = async (acc: SavedAccount) => { setLoading(true); try { const pass = decryptData(acc.encryptedPassword, sessionMasterPass); const w = await ethers.Wallet.fromEncryptedJson(acc.encryptedJson, pass); chrome.runtime.sendMessage({ type: "WALLET_UNLOCKED", address: w.address }); setWallet(w); updateBalance(w, allNetworks[networkKey].rpc); setView('home'); } catch { alert("解除に失敗しました"); } finally { setLoading(false); } };
+  const handleImport = async (type: 'json'|'privateKey', val: string, pass: string, name: string) => { try { let w, j; if (type === 'json') { w = await ethers.Wallet.fromEncryptedJson(val, pass); j = val; } else { w = new ethers.Wallet(val.startsWith('0x') ? val : '0x' + val); j = await w.encrypt(pass); } if (savedAccounts.find(a => a.address === w.address)) return alert("既に登録されています"); const ep = encryptData(pass, sessionMasterPass); const n = [...savedAccounts, { name, address: w.address, encryptedJson: j, encryptedPassword: ep }]; setSavedAccounts(n); await chrome.storage.local.set({ accounts: n }); setView('list'); } catch { alert("インポート失敗"); } };
   const handleDeleteAccount = async (addr: string) => { if (!confirm("本当に削除しますか？")) return; const n = savedAccounts.filter(a => a.address !== addr); setSavedAccounts(n); await chrome.storage.local.set({ accounts: n }); };
-
-  // Settings Handlers
   const handleSetBg = async (img: string | null) => { setBgImage(img); if(img) await chrome.storage.local.set({ bgImage: img }); else await chrome.storage.local.remove('bgImage'); };
   const handleAddNetwork = async (form: any) => { const key = "custom_" + Date.now(); const newNet: NetworkConfig = { name: form.name, rpc: form.rpc, chainId: form.id, symbol: form.symbol, coingeckoId: "", explorer: form.explorer, color: "#888", logo: form.logo, isCustom: true }; const merged = { ...allNetworks, [key]: newNet }; setAllNetworks(merged); const local = await chrome.storage.local.get(['customNetworks']) as StorageLocal; await chrome.storage.local.set({ customNetworks: { ...(local.customNetworks || {}), [key]: newNet } }); setView('settings_network_list'); };
   const handleDeleteNetwork = async (key: string) => { if (!confirm("削除しますか？")) return; const merged = { ...allNetworks }; delete merged[key]; setAllNetworks(merged); const local = await chrome.storage.local.get(['customNetworks']) as StorageLocal; const current = local.customNetworks || {}; delete current[key]; await chrome.storage.local.set({ customNetworks: current }); if (networkKey === key) changeNetwork('sepolia'); };
 
-  // ★重要: スワップ完了時も履歴を更新するための共通ハンドラ
   const handleTxComplete = async (newTx: TxHistory) => {
-    // 画面即時反映
     const updatedHistory = [newTx, ...txHistory].slice(0, 50);
     setTxHistory(updatedHistory);
-    
-    // キャッシュ保存
     if(wallet) {
       const cacheKey = `${networkKey}_${wallet.address.toLowerCase()}`;
       const local = await chrome.storage.local.get(['historyCache']) as StorageLocal;
-      const newCache = { 
-        ...(local.historyCache || {}), 
-        [cacheKey]: { lastUpdated: Date.now(), data: updatedHistory } 
-      };
+      const newCache = { ...(local.historyCache || {}), [cacheKey]: { lastUpdated: Date.now(), data: updatedHistory } };
       await chrome.storage.local.set({ historyCache: newCache });
     }
+    setTimeout(() => { loadAssets(); }, 2000);
   };
 
-  // --- Views ---
   if (view === 'loading') return <div className="text-slate-500 p-10 text-center text-xs">Loading...</div>;
   if (view === 'setup') return <WelcomeView onStartSetup={handleStartSetup} />;
   if (view === '2fa_setup') return <Setup2FAView qrUrl={qrDataUrl} onFinishSetup={handleFinishSetup} />;
@@ -190,18 +178,7 @@ function App() {
     if (view === 'send') return <SendView wallet={wallet} balance={balance} networkKey={networkKey} allNetworks={allNetworks} savedAccounts={savedAccounts} setView={setView} onTxComplete={handleTxComplete} updateBalance={() => updateBalance(wallet, allNetworks[networkKey].rpc)} />;
     if (view === 'history') return <HistoryView wallet={wallet} networkKey={networkKey} allNetworks={allNetworks} setView={setView} txHistory={txHistory} setTxHistory={setTxHistory} lastUpdated={historyLastUpdated} />;
     if (view === 'receive') return <ReceiveView address={wallet.address} setView={setView} />;
-    
-    // ★修正3: 高機能版SwapViewを正しく呼び出す
-    if (view === 'swap') return <SwapView 
-      networkKey={networkKey} 
-      allNetworks={allNetworks} 
-      mainNetwork="mainnet" 
-      wallet={wallet} 
-      txHistory={txHistory} 
-      setView={setView} 
-      onSwap={handleTxComplete} 
-    />;
-    
+    if (view === 'swap') return <SwapView networkKey={networkKey} allNetworks={allNetworks} mainNetwork="mainnet" wallet={wallet} txHistory={txHistory} setView={setView} onSwap={handleTxComplete} />;
     if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;
     if (view === 'settings_account') return <SettingsAccountView privateKey={wallet.privateKey} setView={setView} />;
     if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} setView={setView} />;
@@ -211,7 +188,6 @@ function App() {
 
   if (view === 'list') return <AccountListView accounts={savedAccounts} onUnlock={handleUnlockAccount} onDelete={handleDeleteAccount} onAdd={() => setView('import')} />;
   if (view === 'import') return <ImportView onImport={handleImport} onCancel={() => setView('list')} />;
-  
   if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;
   if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} setView={setView} />;
 
