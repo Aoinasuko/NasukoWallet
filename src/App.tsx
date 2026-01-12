@@ -20,6 +20,9 @@ function App() {
   const [view, setView] = useState('loading'); 
   const [networkKey, setNetworkKey] = useState<string>('sepolia');
   const [allNetworks, setAllNetworks] = useState<Record<string, NetworkConfig>>(DEFAULT_NETWORKS);
+  
+  // ★追加: メイン通貨設定の状態管理
+  const [mainNetwork, setMainNetwork] = useState<string>('mainnet');
 
   const [wallet, setWallet] = useState<ethers.Wallet | ethers.HDNodeWallet | null>(null);
   const [balance, setBalance] = useState('0');
@@ -98,13 +101,17 @@ function App() {
   // --- Functions ---
   const checkLoginStatus = async () => {
     const session = await chrome.storage.session.get(['masterPass']) as StorageSession;
-    const local = await chrome.storage.local.get(['vault', 'accounts', 'network', 'bgImage', 'customNetworks']) as StorageLocal;
+    // ★修正: mainNetworkも読み込む
+    const local = await chrome.storage.local.get(['vault', 'accounts', 'network', 'bgImage', 'customNetworks', 'mainNetwork']) as StorageLocal & { mainNetwork?: string };
+    
     if (local.accounts) setSavedAccounts(local.accounts);
     let merged = { ...DEFAULT_NETWORKS, ...(local.customNetworks || {}) };
     setAllNetworks(merged);
     const net = (local.network && merged[local.network]) ? local.network : 'sepolia';
     setNetworkKey(net);
     if (local.bgImage) setBgImage(local.bgImage);
+    if (local.mainNetwork) setMainNetwork(local.mainNetwork); // メイン通貨設定
+
     if (!local.vault) setView('setup');
     else if (session.masterPass) { setSessionMasterPass(session.masterPass); setView('list'); fetchPrice(merged[net]); } 
     else setView('login');
@@ -117,6 +124,12 @@ function App() {
     chrome.storage.local.set({ network: key });
     fetchPrice(net);
     if (wallet) updateBalance(wallet, net.rpc);
+  };
+  
+  // ★追加: メイン通貨変更ハンドラ
+  const handleSetMainNetwork = async (key: string) => {
+    setMainNetwork(key);
+    await chrome.storage.local.set({ mainNetwork: key });
   };
   
   const fetchPrice = async (net: NetworkConfig) => {
@@ -181,17 +194,27 @@ function App() {
       <SwapView 
         networkKey={networkKey} 
         allNetworks={allNetworks} 
-        mainNetwork="mainnet" 
+        mainNetwork={mainNetwork} 
         wallet={wallet} 
         txHistory={txHistory} 
         tokenList={tokenList}
         setView={setView} 
         onSwap={handleTxComplete}
-        currentPrice={currentPrice} // ★追加: 損益計算用にメイン通貨価格を渡す
+        currentPrice={currentPrice}
       />
     );
     if (view === 'settings_account') return <SettingsAccountView privateKey={wallet.privateKey} setView={setView} />;
-    if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} setView={setView} />;
+    // ★修正: 必要なProps (mainNetwork, onSetMainNetwork, allNetworks) を渡す
+    if (view === 'settings_general') return (
+        <SettingsGeneralView 
+            bgImage={bgImage} 
+            onSetBg={handleSetBg} 
+            mainNetwork={mainNetwork} 
+            onSetMainNetwork={handleSetMainNetwork}
+            allNetworks={allNetworks}
+            setView={setView} 
+        />
+    );
     if (view === 'settings_network_list') return <SettingsNetworkListView allNetworks={allNetworks} onDelete={handleDeleteNetwork} setView={setView} />;
     if (view === 'settings_network_add') return <SettingsNetworkAddView onAdd={handleAddNetwork} setView={setView} />;
   }
@@ -199,7 +222,8 @@ function App() {
   if (view === 'list') return <AccountListView accounts={savedAccounts} onUnlock={handleUnlockAccount} onDelete={handleDeleteAccount} onAdd={() => setView('import')} />;
   if (view === 'import') return <ImportView onImport={handleImport} onCancel={() => setView('list')} />;
   if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;
-  if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} setView={setView} />;
+  // ★修正: ここも同様にPropsを渡す（未ログイン時の設定画面呼び出しを考慮する場合、ただし構成上ここは通らないかも）
+  if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} mainNetwork={mainNetwork} onSetMainNetwork={handleSetMainNetwork} allNetworks={allNetworks} setView={setView} />;
 
   return <div className="text-slate-500 p-10 text-center text-xs">Error: Unknown View ({view})</div>;
 }

@@ -10,12 +10,10 @@ const ERC20_ABI = [
   "function decimals() external view returns (uint8)"
 ];
 
-// SwapRouter02 ABI (deadlineなし)
 const ROUTER_ABI = [
   "function exactInputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) external payable returns (uint256 amountOut)"
 ];
 
-// Fee Tiers to try: 0.05%, 0.3%, 1%
 const FEE_TIERS = [500, 3000, 10000];
 
 export const executeSwap = async (
@@ -36,7 +34,7 @@ export const executeSwap = async (
   const connectedWallet = wallet.connect(provider);
   const router = new ethers.Contract(addresses.ROUTER, ROUTER_ABI, connectedWallet);
 
-  // 1. Decimalsの解決とAmount計算
+  // 1. Decimalsの解決
   let decimals = 18;
   if (!isNativeFrom) {
     try {
@@ -49,15 +47,12 @@ export const executeSwap = async (
   }
 
   const amountIn = ethers.parseUnits(amount, decimals);
-
   console.log(`Preparing Swap on ${networkKey}: ${amount} (raw: ${amountIn})`);
 
-  // 2. Approve処理 (Native以外の場合)
+  // 2. Approve
   if (!isNativeFrom) {
-    console.log("Checking Allowance...");
     const tokenContract = new ethers.Contract(fromTokenAddress, ERC20_ABI, connectedWallet);
     const currentAllowance = await tokenContract.allowance(wallet.address, addresses.ROUTER);
-
     if (currentAllowance < amountIn) {
       console.log("Approving Token...");
       const txApprove = await tokenContract.approve(addresses.ROUTER, ethers.MaxUint256);
@@ -71,19 +66,17 @@ export const executeSwap = async (
   const isNativeTo = toTokenAddress === "NATIVE" || toTokenAddress === ethers.ZeroAddress;
   const actualTokenOut = isNativeTo ? addresses.WETH : toTokenAddress;
 
-  // 基本パラメータ
   const paramsBase = {
     tokenIn: actualTokenIn,
     tokenOut: actualTokenOut,
-    fee: 3000, // 初期値（後で上書き）
+    fee: 3000,
     recipient: wallet.address,
     amountIn: amountIn,
     amountOutMinimum: 0,
     sqrtPriceLimitX96: 0
   };
 
-  // 4. 最適なPool(Fee Tier)をスキャン
-  // staticCallを使ってシミュレーションし、成功する最もアウトプットが多いFeeを探す
+  // 4. 最適なPool(Fee Tier)をスキャン & シミュレーション結果(amountOut)取得
   let bestFee = 3000;
   let maxOut = BigInt(0);
   let feeFound = false;
@@ -92,8 +85,6 @@ export const executeSwap = async (
   for (const fee of FEE_TIERS) {
       const tryParams = { ...paramsBase, fee };
       try {
-          // staticCall: トランザクションを投げずに結果をシミュレーション
-          // Nativeの場合は value を設定してコール
           const out = await router.exactInputSingle.staticCall(tryParams, {
              value: isNativeFrom ? amountIn : 0
           });
@@ -105,30 +96,32 @@ export const executeSwap = async (
               feeFound = true;
           }
       } catch (e) {
-          // console.warn(`Fee ${fee} failed or no liquidity.`);
+          // ignore
       }
   }
 
   if (!feeFound) {
-      throw new Error("有効な流動性プールが見つかりませんでした (Try: 0.05%, 0.3%, 1%)。ペアが存在しない可能性があります。");
+      throw new Error("有効な流動性プールが見つかりませんでした。");
   }
 
-  console.log(`Selected Best Fee: ${bestFee}`);
+  console.log(`Selected Best Fee: ${bestFee}, Est Out: ${maxOut}`);
   paramsBase.fee = bestFee;
 
   // 5. 実行
   console.log("Executing Swap Transaction...");
   const tx = await router.exactInputSingle(paramsBase, { 
     value: isNativeFrom ? amountIn : 0, 
-    gasLimit: 500000 // ガスリミットを少し余裕を持たせる
+    gasLimit: 500000 
   });
 
   console.log("Tx Sent:", tx.hash);
   const receipt = await tx.wait();
   
   if (receipt.status === 0) {
-    throw new Error("Swap Transaction Reverted (On-chain failure)");
+    throw new Error("Swap Transaction Reverted");
   }
 
-  return tx;
+  // ★修正: トランザクション情報だけでなく、シミュレーションで得た受取額(maxOut)も返す
+  // (厳密にはイベントログから拾うべきだが、簡便のためstaticCallの結果を使用)
+  return { tx, amountOutRaw: maxOut };
 };

@@ -26,21 +26,21 @@ export type StorageSession = {
   masterPass?: string;
 };
 
-// ★修正: P/L計算用のフィールドを追加
 export type TxHistory = {
   id: string;
   hash: string;
   type: 'send' | 'receive' | 'swap';
-  amount: string;
-  symbol: string;
+  amount: string;     // 送信額 (Input Amount)
+  symbol: string;     // 表示用 "ETH > USDC"
   from: string;
   to: string;
   date: string;
   network: string;
-  // 以下、追加フィールド (オプショナル)
-  swapRateToMain?: number; // メイン通貨とのレート
-  priceInUsd?: number;     // USD単価
-  priceInJpy?: number;     // JPY単価
+  // ★追加: P/L計算用フィールド
+  receivedAmount?: string; // 受取額 (Output Amount)
+  exchangeRate?: number;   // レート (1 InputToken = ? OutputToken)
+  priceInUsd?: number;     // 取引時点のUSD単価
+  priceInJpy?: number;     // 取引時点のJPY単価
 };
 
 export type HistoryCacheData = {
@@ -56,9 +56,9 @@ export type StorageLocal = {
   history?: TxHistory[]; 
   customNetworks?: Record<string, NetworkConfig>;
   historyCache?: Record<string, HistoryCacheData>; 
+  mainNetwork?: string; // ★追加: メイン通貨設定保存用
 };
 
-// ... (TokenData等は変更なし)
 export type MarketData = {
   price: number;
   change: number;
