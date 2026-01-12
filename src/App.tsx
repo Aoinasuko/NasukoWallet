@@ -178,8 +178,18 @@ function App() {
     if (view === 'send') return <SendView wallet={wallet} balance={balance} networkKey={networkKey} allNetworks={allNetworks} savedAccounts={savedAccounts} setView={setView} onTxComplete={handleTxComplete} updateBalance={() => updateBalance(wallet, allNetworks[networkKey].rpc)} />;
     if (view === 'history') return <HistoryView wallet={wallet} networkKey={networkKey} allNetworks={allNetworks} setView={setView} txHistory={txHistory} setTxHistory={setTxHistory} lastUpdated={historyLastUpdated} />;
     if (view === 'receive') return <ReceiveView address={wallet.address} setView={setView} />;
-    if (view === 'swap') return <SwapView networkKey={networkKey} allNetworks={allNetworks} mainNetwork="mainnet" wallet={wallet} txHistory={txHistory} setView={setView} onSwap={handleTxComplete} />;
-    if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;
+    if (view === 'swap') return (
+      <SwapView 
+        networkKey={networkKey} 
+        allNetworks={allNetworks} 
+        mainNetwork="mainnet" 
+        wallet={wallet} 
+        txHistory={txHistory} 
+        tokenList={tokenList}
+        setView={setView} 
+        onSwap={handleTxComplete} 
+      />
+    );
     if (view === 'settings_account') return <SettingsAccountView privateKey={wallet.privateKey} setView={setView} />;
     if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} setView={setView} />;
     if (view === 'settings_network_list') return <SettingsNetworkListView allNetworks={allNetworks} onDelete={handleDeleteNetwork} setView={setView} />;

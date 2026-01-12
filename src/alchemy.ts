@@ -1,7 +1,7 @@
 import { Alchemy, Network, AssetTransfersCategory, SortingOrder } from "alchemy-sdk";
 import { ethers } from "ethers";
 import type { TokenData, NftData, AlchemyHistory } from "./types";
-import { UNISWAP_ADDRESSES } from "./constants"; 
+import { UNISWAP_ADDRESSES } from "./constants";
 
 const API_KEY = "B4Dt5cTQ4Sp-8Dv81q-zi"; 
 
@@ -209,4 +209,49 @@ export const fetchTransactionHistory = async (address: string, networkKey: strin
           return b.date.localeCompare(a.date);
         }).slice(0, 50);
     } catch (error) { console.error("Alchemy History Error:", error); return []; }
+};
+
+// ★追加: 指定したトークンアドレスのメタデータと価格を取得する関数
+export const fetchTokenMetadataAndPrice = async (address: string, networkKey: string) => {
+  const network = NETWORK_MAP[networkKey];
+  if (!network || !ethers.isAddress(address)) return null;
+
+  const config = { apiKey: API_KEY, network };
+  const alchemy = new Alchemy(config);
+
+  try {
+    // 1. メタデータ取得
+    const metadata = await alchemy.core.getTokenMetadata(address);
+    if (!metadata.symbol) return null;
+
+    // 2. 価格取得 (CoinGecko)
+    let price = { usd: 0, jpy: 0 };
+    const platform = COINGECKO_PLATFORMS[networkKey];
+    
+    if (platform) {
+      try {
+        const url = `https://api.coingecko.com/api/v3/simple/token_price/${platform}?contract_addresses=${address}&vs_currencies=usd,jpy`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const p = data[address.toLowerCase()];
+        if (p) {
+          price = { usd: p.usd || 0, jpy: p.jpy || 0 };
+        }
+      } catch (e) {
+        console.warn("Price fetch failed for custom token:", e);
+      }
+    }
+
+    return {
+      name: metadata.name || "Unknown",
+      symbol: metadata.symbol || "???",
+      decimals: metadata.decimals || 18,
+      logo: metadata.logo || "",
+      address: address,
+      price: price
+    };
+  } catch (error) {
+    console.error("Token Info Fetch Error:", error);
+    return null;
+  }
 };

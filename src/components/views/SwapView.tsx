@@ -1,359 +1,294 @@
 import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { Wrapper } from '../Layout';
-import { GlassCard, Button, Input, SmartIcon } from '../UI';
-import { getNetworkFees, type NetworkFeeInfo } from '../../services/feeService';
+import { GlassCard, Button, Input} from '../UI';
 import { executeSwap } from '../../services/swapService';
-import type { TxHistory } from '../../types';
+import { fetchTokenMetadataAndPrice } from '../../alchemy'; // ★追加
+import { UNISWAP_ADDRESSES } from '../../constants';
+import type { TxHistory, TokenData } from '../../types';
 
-// よく使うトークンリスト
-const COMMON_TOKENS = ['ETH', 'USDC', 'USDT', 'WBTC', 'DAI', 'MATIC', 'BNB', 'AVAX', 'OP', 'ARB'];
+// 主要トークンのリスト (シンボルと名称)
+const MAJOR_TOKENS = [
+  { symbol: 'USDC', name: 'USD Coin' },
+  { symbol: 'USDT', name: 'Tether USD' },
+  { symbol: 'WBTC', name: 'Wrapped BTC' },
+  { symbol: 'DAI', name: 'Dai Stablecoin' },
+  { symbol: 'UNI', name: 'Uniswap' },
+  { symbol: 'MATIC', name: 'Polygon' } // または POL
+];
 
-export const SwapView = ({ networkKey: initialNetworkKey, allNetworks, mainNetwork, wallet, txHistory, setView, onSwap }: any) => {
-  const [step, setStep] = useState<'search' | 'input' | 'confirm'>('search');
+export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, onSwap }: any) => {
+  const [step, setStep] = useState<'input' | 'confirm'>('input');
+  const [loading, setLoading] = useState(false);
 
-  // Search State
-  const [feeList, setFeeList] = useState<NetworkFeeInfo[]>([]);
-  const [loadingFees, setLoadingFees] = useState(false);
+  // --- State ---
+  // From: Native か TokenData
+  const [fromType, setFromType] = useState<'native' | 'token'>('native');
+  const [selectedFromToken, setSelectedFromToken] = useState<TokenData | null>(null);
 
-  // Input State
-  const [selectedNetwork, setSelectedNetwork] = useState<string>(initialNetworkKey);
-  const [fromToken, setFromToken] = useState<string>(''); // Symbol
-  const [toToken, setToToken] = useState<string>('USDC');
+  // To: 選択モード or 入力モード
+  const [toInput, setToInput] = useState<string>(''); // アドレス入力用
+  const [searchedToken, setSearchedToken] = useState<any>(null); // 検索されたトークン情報
+  const [isSearching, setIsSearching] = useState(false);
+
   const [amount, setAmount] = useState<string>('0');
-
-  // Confirm State
-  const [currentFeeNative, setCurrentFeeNative] = useState<string>('0');
-  const [timeLeft, setTimeLeft] = useState(15);
-  // 価格情報: from(USD単価), fromJpy(JPY単価), main(メイン通貨USD単価), fromInMain(メイン通貨換算レート)
-  const [prices, setPrices] = useState<{from: number, fromJpy: number, main: number, fromInMain: number}>({from:0, fromJpy: 0, main:0, fromInMain:0});
-  
-  // P/L (損益) State
-  const [plPercent, setPlPercent] = useState<number | null>(null);
-  const [plUsd, setPlUsd] = useState<number | null>(null);
-  const [plJpy, setPlJpy] = useState<number | null>(null);
-  
   const [balance, setBalance] = useState<string>('0');
-  const [isSwapping, setIsSwapping] = useState(false);
 
-  // 1. Fee Search (初期ロード)
+  // Confirm用データ
+  const [estimatedFee, setEstimatedFee] = useState('0');
+
+  const net = allNetworks[networkKey];
+  const addresses = UNISWAP_ADDRESSES[networkKey];
+
+  // 1. Balance Update
   useEffect(() => {
-    handleScanFees();
-  }, []);
-
-  const handleScanFees = async () => {
-    setLoadingFees(true);
-    const list = await getNetworkFees(allNetworks);
-    setFeeList(list);
-    setLoadingFees(false);
-  };
-
-  const selectNetwork = (netKey: string) => {
-    setSelectedNetwork(netKey);
-    setFromToken(allNetworks[netKey].symbol); // Default to native
-    setStep('input');
-    updateBalance(netKey);
-  };
-
-  const updateBalance = async (netKey: string) => {
-    if (!wallet) return;
-    try {
-      const net = allNetworks[netKey];
-      const provider = new ethers.JsonRpcProvider(net.rpc);
-      const bal = await provider.getBalance(wallet.address);
-      setBalance(ethers.formatEther(bal));
-    } catch { setBalance('0'); }
-  };
-
-  // 2. Input to Confirm
-  const handleProceed = () => {
-    if(!amount || parseFloat(amount) <= 0) return alert("金額を入力してください");
-    setStep('confirm');
-  };
-
-  // 3. Confirm Logic (15s更新 & 損益計算)
-  useEffect(() => {
-    if (step !== 'confirm') return;
-
-    let interval: any;
-
-    const refreshData = async () => {
-      setTimeLeft(15);
-
-      const net = allNetworks[selectedNetwork];
-      const mainNet = allNetworks[mainNetwork || 'mainnet'];
-
-      // A. ガス代見積もり
-      try {
+    const updateBalance = async () => {
+      if (fromType === 'native') {
         const provider = new ethers.JsonRpcProvider(net.rpc);
-        const feeData = await provider.getFeeData();
-        const gasPrice = feeData.gasPrice || feeData.maxFeePerGas || BigInt(0);
-        const estimatedGas = BigInt(150000); // Swap gas limit
-        const fee = gasPrice * estimatedGas;
-        setCurrentFeeNative(ethers.formatEther(fee));
-      } catch (e) { console.error(e); }
+        const bal = await provider.getBalance(wallet.address);
+        setBalance(ethers.formatEther(bal));
+      } else if (selectedFromToken) {
+        setBalance(selectedFromToken.balance);
+      }
+    };
+    updateBalance();
+  }, [fromType, selectedFromToken, networkKey]);
 
-      // B. 価格取得と損益計算
-      try {
-        const fromId = net.coingeckoId; 
-        const mainId = mainNet.coingeckoId;
-
-        // CoinGeckoから価格取得
-        const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${fromId},${mainId}&vs_currencies=usd,jpy`);
-        const data = await res.json();
-
-        const pFrom = data[fromId]?.usd || 0;
-        const pFromJpy = data[fromId]?.jpy || 0;
-        const pMain = data[mainId]?.usd || 0;
-        const rateToMain = pMain > 0 ? pFrom / pMain : 0;
-
-        setPrices(p => ({ ...p, from: pFrom, fromJpy: pFromJpy, main: pMain, fromInMain: rateToMain }));
-
-        // C. 損益計算 (過去の履歴と比較)
-        // 「今回売ろうとしているトークン(fromToken)」を「過去に入手した履歴(to === fromToken)」を探す
-        const prevSwap = txHistory.find((tx: TxHistory) => tx.type === 'swap' && tx.to === fromToken);
-
-        if (prevSwap) {
-          // メイン通貨建て損益
-          if (prevSwap.swapRateToMain) {
-            const diff = ((rateToMain - prevSwap.swapRateToMain) / prevSwap.swapRateToMain) * 100;
-            setPlPercent(diff);
-          }
-          // USD建て損益
-          if (prevSwap.priceInUsd && pFrom > 0) {
-             const diffUsd = ((pFrom - prevSwap.priceInUsd) / prevSwap.priceInUsd) * 100;
-             setPlUsd(diffUsd);
-          }
-           // JPY建て損益
-          if (prevSwap.priceInJpy && pFromJpy > 0) {
-             const diffJpy = ((pFromJpy - prevSwap.priceInJpy) / prevSwap.priceInJpy) * 100;
-             setPlJpy(diffJpy);
-          }
-        } else {
-          setPlPercent(null); setPlUsd(null); setPlJpy(null);
-        }
-
-      } catch (e) { console.error("Price fetch failed", e); }
+  // 2. Custom Token Search Logic
+  useEffect(() => {
+    const searchToken = async () => {
+      // 入力がアドレス形式でなければスキップ
+      if (!ethers.isAddress(toInput)) {
+        setSearchedToken(null);
+        return;
+      }
+      
+      // 既知のアドレス(主要トークン)なら検索不要だが、価格表示のために検索してもよい
+      setIsSearching(true);
+      const info = await fetchTokenMetadataAndPrice(toInput, networkKey);
+      setSearchedToken(info);
+      setIsSearching(false);
     };
 
-    refreshData();
-    interval = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          refreshData();
-          return 15;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    const timer = setTimeout(searchToken, 500); // 入力停止0.5秒後に検索
+    return () => clearTimeout(timer);
+  }, [toInput, networkKey]);
 
-    return () => clearInterval(interval);
-  }, [step, selectedNetwork, mainNetwork, fromToken, txHistory, amount]);
 
-  const handleExecute = async () => {
-    if (!wallet) return;
-    setIsSwapping(true);
-    try {
-      const net = allNetworks[selectedNetwork];
-      let hash = "0xsimulated" + Date.now();
-
-      // 本番スワップ実行 (Sepoliaのみ)
-      if (selectedNetwork === 'sepolia') {
-        try {
-          const tx = await executeSwap(wallet, selectedNetwork, fromToken, toToken, amount);
-          console.log("Swap TX:", tx);
-          hash = tx.hash;
-        } catch (e: any) {
-          alert("Swap Failed: " + e.message);
-          setIsSwapping(false);
-          return;
-        }
+  // Helper: トークン選択 (From)
+  const handleSelectFrom = (e: any) => {
+    const val = e.target.value;
+    if (val === 'NATIVE') {
+      setFromType('native');
+      setSelectedFromToken(null);
+    } else {
+      const token = tokenList.find((t: TokenData) => t.address === val);
+      if (token) {
+        setFromType('token');
+        setSelectedFromToken(token);
       }
-
-      // 履歴作成 (★ここで今回のレートを保存するのが重要！)
-      const newTx: TxHistory = {
-        id: crypto.randomUUID(),
-        hash: hash,
-        type: 'swap',
-        amount: amount,
-        symbol: `${fromToken} > ${toToken}`,
-        from: wallet.address,
-        to: toToken, // 入手したトークン名を記録
-        date: new Date().toLocaleString('ja-JP'),
-        network: net.name,
-        // ★P/L計算用に今回のレートを記録
-        swapRateToMain: prices.fromInMain,
-        priceInUsd: prices.from, 
-        priceInJpy: prices.fromJpy 
-      };
-
-      onSwap(newTx);
-      alert("スワップが完了しました！");
-      setView('history');
-    } catch (e: any) {
-      console.error(e);
-      alert("エラーが発生しました: " + e.message);
-    } finally {
-      setIsSwapping(false);
     }
   };
 
-  // -- Renders --
+  // Helper: トークン選択 (To - プリセット選択時)
+  const handleSelectToPreset = (address: string) => {
+    setToInput(address);
+  };
 
-  // 1. Search Screen
-  if (step === 'search') {
-    return (
-      <Wrapper title="ネットワーク検索" backAction={() => setView('home')}>
-        <GlassCard className="mb-4 text-center">
-           <h3 className="font-bold text-cyan-100 mb-2">安価なネットワークを探す</h3>
-           <p className="text-xs text-slate-400">各チェーンの手数料(Swap目安)を表示します</p>
-           <Button onClick={handleScanFees} variant="secondary" className="mt-2" disabled={loadingFees}>
-             {loadingFees ? "検索中..." : "更新する"}
-           </Button>
-        </GlassCard>
+  // プリセットリスト作成 (主要 + 所持)
+  // アドレスがわかるものだけフィルタリング (UNISWAP_ADDRESSES等から補完が必要だが簡易的に実装)
+  const availableToTokens = [
+     // 主要トークン (定数からアドレス解決できるもの)
+     ...MAJOR_TOKENS.map(t => {
+         // UNISWAP_ADDRESSES にあるかチェック (USDC, MATIC等)
+         const key = t.symbol as keyof typeof addresses;
+         const addr = addresses && addresses[key] ? addresses[key] : null;
+         return addr ? { symbol: t.symbol, address: addr, type: 'Major' } : null;
+     }).filter(Boolean),
+     // 所持トークン
+     ...tokenList.map((t: TokenData) => ({ symbol: t.symbol, address: t.address, type: 'Held' }))
+  ];
 
-        <div className="flex flex-col gap-2">
-           {feeList.map((fee) => (
-             <div key={fee.networkKey} onClick={() => selectNetwork(fee.networkKey)} className="bg-slate-900/50 border border-slate-700 p-3 rounded-xl flex justify-between items-center cursor-pointer hover:bg-slate-800 transition">
-               <div className="flex items-center gap-3">
-                 <SmartIcon symbol={fee.symbol} className="w-8 h-8 rounded-full" />
-                 <div>
-                   <div className="font-bold text-sm text-cyan-50">{fee.networkName}</div>
-                   <div className="text-xs text-slate-500">Gas: {fee.gasPriceGwei.toFixed(2)} Gwei</div>
-                 </div>
-               </div>
-               <div className="text-right">
-                 <div className="text-xs text-slate-400">推定手数料</div>
-                 <div className="font-mono text-cyan-300">
-                   {fee.isError ? "Error" : `${fee.estimatedFeeNative.toFixed(5)} ${fee.symbol}`}
-                 </div>
-               </div>
-             </div>
-           ))}
-        </div>
-      </Wrapper>
-    );
-  }
+  // 重複排除
+  const uniqueToTokens = Array.from(new Map(availableToTokens.map((item: any) => [item.address.toLowerCase(), item])).values());
 
-  // 2. Input Screen
+
+  const handleProceed = async () => {
+    if (!amount || parseFloat(amount) <= 0) return alert("金額を入力してください");
+    if (!ethers.isAddress(toInput)) return alert("送信先トークンを選択または正しいアドレスを入力してください");
+    
+    // ガス代見積もり (簡易)
+    setLoading(true);
+    try {
+      const provider = new ethers.JsonRpcProvider(net.rpc);
+      const feeData = await provider.getFeeData();
+      const fee = (feeData.gasPrice || BigInt(0)) * BigInt(200000);
+      setEstimatedFee(ethers.formatEther(fee));
+      setStep('confirm');
+    } catch(e) { console.error(e); }
+    setLoading(false);
+  };
+
+  const handleExecute = async () => {
+    try {
+      setLoading(true);
+      
+      const fromAddr = fromType === 'native' ? 'NATIVE' : selectedFromToken!.address;
+      const toAddr = toInput;
+      const isNative = fromType === 'native';
+
+      // 汎用化した executeSwap を呼び出し
+      const tx = await executeSwap(wallet, networkKey, fromAddr, toAddr, amount, isNative);
+      
+      const fromSym = fromType === 'native' ? net.symbol : selectedFromToken!.symbol;
+      const toSym = searchedToken ? searchedToken.symbol : "Unknown";
+
+      // 履歴追加
+      const newTx: TxHistory = {
+        id: crypto.randomUUID(),
+        hash: tx.hash,
+        type: 'swap',
+        amount: amount,
+        symbol: `${fromSym} > ${toSym}`,
+        from: wallet.address,
+        to: toSym,
+        date: new Date().toLocaleString('ja-JP'),
+        network: net.name,
+      };
+
+      onSwap(newTx);
+      alert("スワップ完了！");
+      setView('history');
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Render ---
+
   if (step === 'input') {
-    const net = allNetworks[selectedNetwork];
     return (
-      <Wrapper title="スワップ内容" backAction={() => setStep('search')}>
+      <Wrapper title="スワップ" backAction={() => setView('home')}>
         <GlassCard>
-           <div className="flex items-center gap-2 mb-4 bg-cyan-900/20 p-2 rounded">
-             <SmartIcon symbol={net.symbol} className="w-6 h-6 rounded-full" />
-             <span className="font-bold text-cyan-50">{net.name}</span>
-           </div>
-
-           <p className="text-xs text-slate-400 mb-1">元通貨 (保有: {parseFloat(balance).toFixed(4)})</p>
+           {/* FROM SECTION */}
+           <p className="text-xs text-slate-400 mb-1">交換元 (Balance: {parseFloat(balance).toFixed(4)})</p>
            <div className="flex gap-2 mb-4">
-             <Input value={amount} onChange={(e:any) => setAmount(e.target.value)} type="number" placeholder="0.0" />
-             <div className="bg-slate-800 p-2 rounded w-24 text-center text-sm font-bold flex items-center justify-center">{fromToken}</div>
+             <div className="flex-1">
+               <Input 
+                 value={amount} 
+                 onChange={(e:any) => setAmount(e.target.value)} 
+                 type="number" 
+                 placeholder="0.0" 
+               />
+             </div>
+             <select 
+               className="bg-slate-800 text-white p-2 rounded w-32 text-sm border border-slate-600"
+               onChange={handleSelectFrom}
+               value={fromType === 'native' ? 'NATIVE' : selectedFromToken?.address}
+             >
+               <option value="NATIVE">{net.symbol} (Native)</option>
+               {tokenList.map((t: TokenData) => (
+                 <option key={t.address} value={t.address}>{t.symbol}</option>
+               ))}
+             </select>
            </div>
 
            <div className="flex justify-center mb-4 text-2xl text-slate-600">↓</div>
 
-           <p className="text-xs text-slate-400 mb-1">先通貨</p>
-           <div className="flex gap-2 mb-6">
-             <select className="flex-1 bg-slate-950 border border-slate-700 rounded p-2 text-white" value={toToken} onChange={(e) => setToToken(e.target.value)}>
-               {COMMON_TOKENS.map(t => <option key={t} value={t}>{t}</option>)}
-             </select>
+           {/* TO SECTION */}
+           <p className="text-xs text-slate-400 mb-1">交換先 (リスト選択 または アドレス入力)</p>
+           
+           {/* 1. プリセット選択ボタン */}
+           <div className="flex flex-wrap gap-2 mb-3">
+             {uniqueToTokens.map((t: any) => (
+               <button 
+                 key={t.address}
+                 onClick={() => handleSelectToPreset(t.address)}
+                 className={`px-2 py-1 rounded text-xs border ${toInput === t.address ? 'bg-cyan-600 border-cyan-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-cyan-500'}`}
+               >
+                 {t.symbol}
+               </button>
+             ))}
            </div>
 
-           <Button onClick={handleProceed}>確認画面へ</Button>
-        </GlassCard>
-      </Wrapper>
-    );
-  }
-
-  // 3. Confirm Screen (P/L表示あり)
-  if (step === 'confirm') {
-    const net = allNetworks[selectedNetwork];
-    const totalDeduct = parseFloat(amount) + parseFloat(currentFeeNative);
-    const remaining = parseFloat(balance) - totalDeduct;
-    const remainingJpy = remaining * prices.fromJpy;
-
-    return (
-      <Wrapper title="確認" backAction={() => setStep('input')}>
-        <GlassCard>
-           <div className="text-center mb-4">
-             <div className="text-xs text-slate-400 mb-1">手数料更新まで: {timeLeft}秒</div>
-             <div className="w-full h-1 bg-slate-800 rounded overflow-hidden">
-               <div className="h-full bg-cyan-500 transition-all duration-1000" style={{width: `${(timeLeft/15)*100}%`}}></div>
-             </div>
-           </div>
-
-           <div className="space-y-4 mb-6">
-             <div className="flex justify-between text-sm">
-               <span className="text-slate-400">スワップ元</span>
-               <span className="font-bold text-white">{amount} {fromToken}</span>
-             </div>
-             <div className="flex justify-between text-sm">
-               <span className="text-slate-400">ガス代 (推定)</span>
-               <span className="font-mono text-red-300">-{currentFeeNative.slice(0,8)} {net.symbol}</span>
-             </div>
-             <div className="border-t border-slate-700 pt-2 flex justify-between text-sm">
-               <span className="text-slate-400">残高予想</span>
-               <div className="text-right">
-                 <div className="font-bold text-cyan-300">{remaining.toFixed(5)} {net.symbol}</div>
-                 <div className="text-xs text-slate-500">≈ ¥{remainingJpy.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-               </div>
-             </div>
-
-             {/* ★損益表示セクション★ */}
-             {(plPercent !== null || plUsd !== null || plJpy !== null) && (
-               <div className="mt-4 grid grid-cols-2 gap-2 bg-slate-900/50 p-2 rounded-xl">
-                 <div className="col-span-2 text-[10px] text-slate-500 text-center mb-1">
-                    前回の{fromToken}取得時と比較
+           {/* 2. アドレス入力 & 検索結果 */}
+           <div className="mb-6">
+             <Input 
+               value={toInput} 
+               onChange={(e:any) => setToInput(e.target.value)} 
+               placeholder="トークンアドレス (0x...)" 
+               className="text-xs font-mono"
+             />
+             
+             {isSearching && <div className="text-xs text-cyan-400 mt-1 animate-pulse">Searching info...</div>}
+             
+             {searchedToken && (
+               <div className="mt-2 p-2 bg-slate-900/80 rounded border border-cyan-900/50 flex items-center justify-between">
+                 <div className="flex items-center gap-2">
+                   {searchedToken.logo && <img src={searchedToken.logo} className="w-6 h-6 rounded-full"/>}
+                   <div>
+                     <div className="text-sm font-bold text-cyan-100">{searchedToken.name} ({searchedToken.symbol})</div>
+                     <div className="text-[10px] text-slate-400">Decimals: {searchedToken.decimals}</div>
+                   </div>
                  </div>
-                 
-                 {/* メイン通貨建て */}
-                 {plPercent !== null && (
-                   <div className={`col-span-2 p-2 rounded border ${plPercent >= 0 ? 'bg-green-900/20 border-green-500/50' : 'bg-red-900/20 border-red-500/50'}`}>
-                     <div className="text-[10px] text-slate-300">メイン通貨建 損益</div>
-                     <div className={`text-lg font-bold ${plPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                       {plPercent >= 0 ? '+' : ''}{plPercent.toFixed(2)}%
-                     </div>
-                   </div>
-                 )}
-                 
-                 {/* USD建て */}
-                 {plUsd !== null && (
-                   <div className={`p-2 rounded border ${plUsd >= 0 ? 'bg-green-900/20 border-green-500/50' : 'bg-red-900/20 border-red-500/50'}`}>
-                     <div className="text-[10px] text-slate-300">USD建 損益</div>
-                     <div className={`text-sm font-bold ${plUsd >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                       {plUsd >= 0 ? '+' : ''}{plUsd.toFixed(2)}%
-                     </div>
-                   </div>
-                 )}
-                 
-                 {/* JPY建て */}
-                 {plJpy !== null && (
-                   <div className={`p-2 rounded border ${plJpy >= 0 ? 'bg-green-900/20 border-green-500/50' : 'bg-red-900/20 border-red-500/50'}`}>
-                     <div className="text-[10px] text-slate-300">JPY建 損益</div>
-                     <div className={`text-sm font-bold ${plJpy >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                       {plJpy >= 0 ? '+' : ''}{plJpy.toFixed(2)}%
-                     </div>
-                   </div>
-                 )}
+                 <div className="text-right">
+                    <div className="text-xs text-white">
+                      1 {searchedToken.symbol} = 
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      ${searchedToken.price.usd} / ¥{searchedToken.price.jpy}
+                    </div>
+                 </div>
                </div>
              )}
-
-             {plPercent === null && plUsd === null && (
-               <div className="mt-4 p-2 text-center text-xs text-slate-500 border border-slate-700 border-dashed rounded">
-                 ※前回の取得履歴が見つからないため損益は表示されません
-               </div>
+             
+             {!isSearching && toInput && !searchedToken && ethers.isAddress(toInput) && (
+                <div className="text-xs text-red-400 mt-1">トークン情報が見つかりません</div>
              )}
            </div>
 
-           <Button onClick={handleExecute} disabled={isSwapping}>
-             {isSwapping ? "スワップ実行中..." : "スワップ実行"}
+           <Button onClick={handleProceed} disabled={loading || !amount || !toInput}>
+             確認画面へ
            </Button>
         </GlassCard>
       </Wrapper>
     );
   }
 
-  return null;
+  // CONFIRM SECTION
+  return (
+    <Wrapper title="確認" backAction={() => setStep('input')}>
+      <GlassCard>
+        <div className="space-y-4 mb-6">
+          <div className="flex justify-between text-sm">
+            <span className="text-slate-400">Swap From</span>
+            <span className="font-bold text-white">
+              {amount} {fromType === 'native' ? net.symbol : selectedFromToken?.symbol}
+            </span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-slate-400">Swap To</span>
+            <span className="font-bold text-cyan-300">
+              {searchedToken ? `${searchedToken.symbol} (${searchedToken.name})` : toInput.slice(0,6)+'...'}
+            </span>
+          </div>
+          {searchedToken && (
+            <div className="text-right text-[10px] text-slate-500">
+               参考レート: 1 Token ≈ ¥{searchedToken.price.jpy}
+            </div>
+          )}
+          <div className="border-t border-slate-700 pt-2 flex justify-between text-sm">
+            <span className="text-slate-400">Est. Gas Fee</span>
+            <span className="font-mono text-red-300">{estimatedFee.slice(0,8)} {net.symbol}</span>
+          </div>
+        </div>
+
+        <Button onClick={handleExecute} disabled={loading}>
+          {loading ? "処理中..." : "スワップ実行"}
+        </Button>
+      </GlassCard>
+    </Wrapper>
+  );
 };
