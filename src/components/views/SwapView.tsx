@@ -84,7 +84,6 @@ export const SwapView = ({ networkKey: initialNetworkKey, allNetworks, mainNetwo
         const rateToMain = pMain > 0 ? pFrom / pMain : 0;
         setPrices(p => ({ ...p, from: pFrom, fromJpy: pFromJpy, main: pMain, fromInMain: rateToMain }));
 
-        const prevSwap = txHistory.find((tx: TxHistory) => tx.type === 'swap' && tx.symbol.includes(fromToken));
         // ... (P/L計算はそのまま) ...
       } catch (e) { console.error(e); }
     };
