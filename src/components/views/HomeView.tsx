@@ -8,7 +8,6 @@ type Props = {
   balance: string;
   networkKey: string;
   allNetworks: Record<string, NetworkConfig>;
-  // ★型を修正: 変動率も受け取る
   currentPrice: { usd: number, jpy: number, usdChange: number, jpyChange: number } | null;
   currency: 'JPY' | 'USD';
   onSetCurrency: () => void;
@@ -27,13 +26,17 @@ export const HomeView = ({
   tokenList, nftList, isAssetLoading, onChangeNetwork, setView, onLogout, bgImage, onRefreshBalance
 }: Props) => {
   const [assetTab, setAssetTab] = useState<'tokens' | 'nfts'>('tokens');
-  // ソート状態の追加
+  
+  // ソート状態
   const [sortKey, setSortKey] = useState<'name' | 'value' | 'amount'>('amount');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  
+  // ★追加: 微小残高(Dust)を表示するかどうかのState
+  const [showDust, setShowDust] = useState(false);
 
   const currentNet = allNetworks[networkKey];
 
-  // メイン通貨の価格と変動率を決定
+  // メイン通貨の価格と変動率
   const mainPrice = currentPrice ? (currency === 'JPY' ? currentPrice.jpy : currentPrice.usd) : 0;
   const mainChange = currentPrice ? (currency === 'JPY' ? currentPrice.jpyChange : currentPrice.usdChange) : 0;
   
@@ -43,8 +46,15 @@ export const HomeView = ({
   // 通貨記号
   const sym = currency === 'JPY' ? '¥' : '$';
 
-  // トークンのソートロジック
-  const sortedTokens = [...tokenList].sort((a, b) => {
+  // ★追加: トークンのフィルタリングロジック
+  // showDustがOFFなら、0.0001未満を隠す
+  const filteredTokens = tokenList.filter(token => {
+    if (showDust) return true; // チェックありなら全表示
+    return parseFloat(token.balance) >= 0.0001; // チェックなしなら足切り
+  });
+
+  // トークンのソートロジック (filteredTokens を使用)
+  const sortedTokens = [...filteredTokens].sort((a, b) => {
     let valA: any = 0;
     let valB: any = 0;
 
@@ -83,7 +93,6 @@ export const HomeView = ({
         <div className="mt-4 text-center">
           <h2 className="text-4xl font-bold tracking-tight text-white drop-shadow-lg">{parseFloat(balance).toFixed(4)} <span className="text-lg text-cyan-400">{currentNet.symbol}</span></h2>
           
-          {/* ★修正: 価格と変動率の表示 */}
           {currentPrice ? (
             <div className="flex flex-col items-center mt-1">
               <button onClick={onSetCurrency} className="text-cyan-200/80 font-medium text-sm bg-slate-950/40 px-3 py-1 rounded-full backdrop-blur-sm border border-white/5 cursor-pointer hover:bg-slate-950/60 active:scale-95 transition">
@@ -114,27 +123,43 @@ export const HomeView = ({
           <button onClick={() => setAssetTab('nfts')} className={`flex-1 py-3 text-sm font-bold transition ${assetTab === 'nfts' ? 'text-cyan-400 border-b-2 border-cyan-400 bg-cyan-900/10' : 'text-slate-500 hover:text-slate-300'}`}>NFTs</button>
         </div>
 
-        {/* ソートコントローラー (トークンタブのみ) */}
+        {/* ソートコントローラー & 微小残高フィルター (トークンタブのみ) */}
         {!isAssetLoading && assetTab === 'tokens' && (
-          <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 flex-shrink-0">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-slate-500">並び順:</span>
-              <select
-                value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as any)}
-                className="bg-slate-800 text-[10px] text-slate-300 rounded border border-slate-700 focus:outline-none focus:border-cyan-500 p-1"
+          <div className="flex flex-col border-b border-white/5 flex-shrink-0 bg-slate-900/30">
+            <div className="flex items-center justify-between px-4 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-slate-500">並び順:</span>
+                <select
+                  value={sortKey}
+                  onChange={(e) => setSortKey(e.target.value as any)}
+                  className="bg-slate-800 text-[10px] text-slate-300 rounded border border-slate-700 focus:outline-none focus:border-cyan-500 p-1"
+                >
+                  <option value="amount">所持数</option>
+                  <option value="value">価値</option>
+                  <option value="name">名称</option>
+                </select>
+              </div>
+              <button
+                onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                className="text-[10px] text-slate-400 hover:text-cyan-400 transition flex items-center gap-1 bg-slate-800/50 px-2 py-1 rounded border border-white/5"
               >
-                <option value="amount">所持数</option>
-                <option value="value">価値</option>
-                <option value="name">名称</option>
-              </select>
+                {sortOrder === 'asc' ? '昇順 ▲' : '降順 ▼'}
+              </button>
             </div>
-            <button
-              onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
-              className="text-[10px] text-slate-400 hover:text-cyan-400 transition flex items-center gap-1 bg-slate-800/50 px-2 py-1 rounded border border-white/5"
-            >
-              {sortOrder === 'asc' ? '昇順 ▲' : '降順 ▼'}
-            </button>
+            {/* ★追加: 微小残高表示スイッチ */}
+            <div className="px-4 pb-2 flex justify-end">
+              <label className="flex items-center gap-2 cursor-pointer group select-none">
+                <input 
+                  type="checkbox" 
+                  checked={showDust} 
+                  onChange={(e) => setShowDust(e.target.checked)}
+                  className="w-3 h-3 accent-cyan-500 rounded cursor-pointer"
+                />
+                <span className="text-[10px] text-slate-500 group-hover:text-cyan-400 transition">
+                  微小な残高も表示する
+                </span>
+              </label>
+            </div>
           </div>
         )}
 
@@ -143,7 +168,7 @@ export const HomeView = ({
           
           {!isAssetLoading && assetTab === 'tokens' && (
             <div className="flex flex-col gap-3">
-              {/* Native Token */}
+              {/* Native Token (常に表示) */}
               <div className="flex items-center justify-between p-3 rounded-xl bg-slate-800/40 hover:bg-slate-800/60 transition cursor-pointer flex-shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-slate-700 p-1"><SmartIcon src={currentNet.logo} symbol={currentNet.symbol} className="w-full h-full object-contain" /></div>
@@ -155,9 +180,8 @@ export const HomeView = ({
                 </div>
               </div>
               
-              {/* Fetched Tokens */}
+              {/* Fetched Tokens (filteredTokensを使用) */}
               {sortedTokens.map((token, i) => {
-                // 通貨に応じたデータを取得
                 const market = token.market ? (currency === 'JPY' ? token.market.jpy : token.market.usd) : null;
                 const value = market ? parseFloat(token.balance) * market.price : 0;
 
@@ -168,7 +192,8 @@ export const HomeView = ({
                       <div><div className="font-bold text-sm text-cyan-50">{token.symbol}</div><div className="text-[10px] text-slate-400">{token.name}</div></div>
                     </div>
                     <div className="text-right">
-                      <div className="font-bold text-sm text-cyan-50">{parseFloat(token.balance).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
+                      {/* 桁数が多い場合は調整表示 */}
+                      <div className="font-bold text-sm text-cyan-50">{parseFloat(token.balance).toLocaleString(undefined, { maximumFractionDigits: 6 })}</div>
                       {market ? (
                         <div className="flex flex-col items-end">
                           <div className="text-[10px] text-slate-400">≈ {sym}{value.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>

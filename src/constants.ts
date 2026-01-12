@@ -58,15 +58,17 @@ export const DEX_URLS: Record<string, string> = {
 // ★修正: MATICのアドレスを追加
 export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; USDC: string; MATIC?: string }> = {
   sepolia: {
-    ROUTER: "0xE592427A0AEce92De3Edee1F18E0157C05861564", // V3 Router
-    WETH: "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", // Sepolia WETH
-    USDC: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia USDC (Faucet)
-    MATIC: "0x789218204648c3226a32332617300305a463a033", // Dummy MATIC
+    // ★修正: Sepolia用の正しいSwapRouter02アドレス
+    ROUTER: "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E", 
+    WETH: "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", 
+    // Sepolia USDC (Faucet)
+    USDC: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", 
+    MATIC: "0x789218204648c3226a32332617300305a463a033", 
   },
   mainnet: {
     ROUTER: "0xE592427A0AEce92De3Edee1F18E0157C05861564", 
     WETH: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", 
     USDC: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 
-    MATIC: "0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0", // Mainnet MATIC
+    MATIC: "0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0", 
   }
 };
