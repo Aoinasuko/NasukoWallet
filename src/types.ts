@@ -56,7 +56,7 @@ export type StorageLocal = {
   history?: TxHistory[]; 
   customNetworks?: Record<string, NetworkConfig>;
   historyCache?: Record<string, HistoryCacheData>;
-  mainNetwork?: string; // ★追加: メインネットワーク設定
+  mainNetwork?: string;
 };
 
 export type MarketData = {
@@ -86,7 +86,7 @@ export type NftData = {
 export type AlchemyHistory = {
   id: string;
   hash: string;
-  type: 'send' | 'receive';
+  type: 'send' | 'receive' | 'swap';
   amount: string;
   symbol: string;
   from: string;
