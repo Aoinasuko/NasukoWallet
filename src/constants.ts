@@ -61,5 +61,10 @@ export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; U
     ROUTER: "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E", // SwapRouter02
     WETH: "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", // Sepolia WETH
     USDC: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia USDC
+  },
+  mainnet: {
+    ROUTER: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", // SwapRouter02
+    WETH: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", // Mainnet WETH
+    USDC: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // Mainnet USDC
   }
 };

@@ -19,11 +19,12 @@ type Props = {
   setView: (view: string) => void;
   onLogout: () => void;
   bgImage: string | null;
+  onRefreshBalance?: () => void;
 };
 
 export const HomeView = ({ 
   wallet, balance, networkKey, allNetworks, currentPrice, currency, onSetCurrency,
-  tokenList, nftList, isAssetLoading, onChangeNetwork, setView, onLogout, bgImage 
+  tokenList, nftList, isAssetLoading, onChangeNetwork, setView, onLogout, bgImage, onRefreshBalance
 }: Props) => {
   const [assetTab, setAssetTab] = useState<'tokens' | 'nfts'>('tokens');
   // ソート状態の追加
@@ -73,9 +74,9 @@ export const HomeView = ({
   return (
     <Wrapper bgImage={bgImage} currentNetwork={networkKey} allNetworks={allNetworks} onNetworkChange={onChangeNetwork} onViewSettings={() => setView('settings_menu')}>
       <div className="flex flex-col items-center mt-6 mb-6">
-        <div className="relative group">
+        <div className="relative group cursor-pointer" onClick={onRefreshBalance}>
           <div className="absolute -inset-1 bg-gradient-to-r from-cyan-400 to-blue-500 rounded-full blur opacity-25 group-hover:opacity-50 transition duration-1000"></div>
-          <div className="relative w-20 h-20 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center shadow-xl p-1">
+          <div className="relative w-20 h-20 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center shadow-xl p-1 active:scale-95 transition">
              <SmartIcon src={currentNet.logo} symbol={currentNet.symbol} className="w-full h-full rounded-full object-cover" />
           </div>
         </div>
