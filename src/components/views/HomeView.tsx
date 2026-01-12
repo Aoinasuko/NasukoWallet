@@ -26,6 +26,10 @@ export const HomeView = ({
   tokenList, nftList, isAssetLoading, onChangeNetwork, setView, onLogout, bgImage 
 }: Props) => {
   const [assetTab, setAssetTab] = useState<'tokens' | 'nfts'>('tokens');
+  // ソート状態の追加
+  const [sortKey, setSortKey] = useState<'name' | 'value' | 'amount'>('amount');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
   const currentNet = allNetworks[networkKey];
 
   // メイン通貨の価格と変動率を決定
@@ -37,6 +41,34 @@ export const HomeView = ({
 
   // 通貨記号
   const sym = currency === 'JPY' ? '¥' : '$';
+
+  // トークンのソートロジック
+  const sortedTokens = [...tokenList].sort((a, b) => {
+    let valA: any = 0;
+    let valB: any = 0;
+
+    switch (sortKey) {
+      case 'name':
+        valA = a.name.toLowerCase();
+        valB = b.name.toLowerCase();
+        break;
+      case 'amount':
+        valA = parseFloat(a.balance);
+        valB = parseFloat(b.balance);
+        break;
+      case 'value': {
+        const marketA = a.market ? (currency === 'JPY' ? a.market.jpy : a.market.usd) : null;
+        valA = marketA ? parseFloat(a.balance) * marketA.price : 0;
+        const marketB = b.market ? (currency === 'JPY' ? b.market.jpy : b.market.usd) : null;
+        valB = marketB ? parseFloat(b.balance) * marketB.price : 0;
+        break;
+      }
+    }
+
+    if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+    if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+    return 0;
+  });
 
   return (
     <Wrapper bgImage={bgImage} currentNetwork={networkKey} allNetworks={allNetworks} onNetworkChange={onChangeNetwork} onViewSettings={() => setView('settings_menu')}>
@@ -75,18 +107,43 @@ export const HomeView = ({
         ))}
       </div>
 
-      <div className="bg-slate-900/60 backdrop-blur-md rounded-t-2xl border-t border-l border-r border-cyan-500/20 flex-1 min-h-[300px] shadow-[0_-4px_20px_rgba(0,0,0,0.3)]">
-        <div className="flex border-b border-white/5">
+      <div className="bg-slate-900/60 backdrop-blur-md rounded-t-2xl border-t border-l border-r border-cyan-500/20 flex-1 min-h-[300px] shadow-[0_-4px_20px_rgba(0,0,0,0.3)] flex flex-col">
+        <div className="flex border-b border-white/5 flex-shrink-0">
           <button onClick={() => setAssetTab('tokens')} className={`flex-1 py-3 text-sm font-bold transition ${assetTab === 'tokens' ? 'text-cyan-400 border-b-2 border-cyan-400 bg-cyan-900/10' : 'text-slate-500 hover:text-slate-300'}`}>トークン</button>
           <button onClick={() => setAssetTab('nfts')} className={`flex-1 py-3 text-sm font-bold transition ${assetTab === 'nfts' ? 'text-cyan-400 border-b-2 border-cyan-400 bg-cyan-900/10' : 'text-slate-500 hover:text-slate-300'}`}>NFTs</button>
         </div>
-        <div className="p-4">
+
+        {/* ソートコントローラー (トークンタブのみ) */}
+        {!isAssetLoading && assetTab === 'tokens' && (
+          <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 flex-shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-slate-500">並び順:</span>
+              <select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as any)}
+                className="bg-slate-800 text-[10px] text-slate-300 rounded border border-slate-700 focus:outline-none focus:border-cyan-500 p-1"
+              >
+                <option value="amount">所持数</option>
+                <option value="value">価値</option>
+                <option value="name">名称</option>
+              </select>
+            </div>
+            <button
+              onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+              className="text-[10px] text-slate-400 hover:text-cyan-400 transition flex items-center gap-1 bg-slate-800/50 px-2 py-1 rounded border border-white/5"
+            >
+              {sortOrder === 'asc' ? '昇順 ▲' : '降順 ▼'}
+            </button>
+          </div>
+        )}
+
+        <div className="p-4 overflow-y-auto max-h-[320px] scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
           {isAssetLoading && <div className="text-center text-xs text-slate-400 py-4 animate-pulse">Loading Assets...</div>}
           
           {!isAssetLoading && assetTab === 'tokens' && (
             <div className="flex flex-col gap-3">
               {/* Native Token */}
-              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-800/40 hover:bg-slate-800/60 transition cursor-pointer">
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-800/40 hover:bg-slate-800/60 transition cursor-pointer flex-shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-slate-700 p-1"><SmartIcon src={currentNet.logo} symbol={currentNet.symbol} className="w-full h-full object-contain" /></div>
                   <div><div className="font-bold text-sm text-cyan-50">{currentNet.symbol}</div><div className="text-[10px] text-slate-400">Native</div></div>
@@ -98,13 +155,13 @@ export const HomeView = ({
               </div>
               
               {/* Fetched Tokens */}
-              {tokenList.map((token, i) => {
+              {sortedTokens.map((token, i) => {
                 // 通貨に応じたデータを取得
                 const market = token.market ? (currency === 'JPY' ? token.market.jpy : token.market.usd) : null;
                 const value = market ? parseFloat(token.balance) * market.price : 0;
 
                 return (
-                  <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-800/40 hover:bg-slate-800/60 transition cursor-pointer">
+                  <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-800/40 hover:bg-slate-800/60 transition cursor-pointer flex-shrink-0">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-slate-700 p-1"><SmartIcon src={token.logo} symbol={token.symbol} className="w-full h-full object-contain" /></div>
                       <div><div className="font-bold text-sm text-cyan-50">{token.symbol}</div><div className="text-[10px] text-slate-400">{token.name}</div></div>
@@ -125,7 +182,7 @@ export const HomeView = ({
                   </div>
                 );
               })}
-              {tokenList.length === 0 && <div className="text-center text-[10px] text-slate-600 mt-2">No other tokens found</div>}
+              {sortedTokens.length === 0 && <div className="text-center text-[10px] text-slate-600 mt-2">No other tokens found</div>}
             </div>
           )}
 
