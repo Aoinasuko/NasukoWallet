@@ -11,6 +11,13 @@ import type { TxHistory, TokenData } from '../../types';
 // ステーブルコイン判定用リスト
 const STABLE_COINS = ['USDC', 'USDT', 'DAI'];
 
+// 小さな数値を文字列化するときに指数表記(1e-7など)を避けて全桁表示するヘルパー
+const formatFullNumber = (num: number) => {
+  if (num === 0) return "0";
+  // 非常に小さい数はtoFixedで桁数を確保し、末尾の0を消す
+  return num.toFixed(20).replace(/\.?0+$/, "");
+};
+
 export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, onSwap, txHistory, currentPrice }: any) => {
   const [step, setStep] = useState<'input' | 'confirm'>('input');
   const [loading, setLoading] = useState(false);
@@ -31,6 +38,13 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     profitColor: string;
     prevRateStr: string;
     isPrediction?: boolean;
+    // ★追加: 総額比較用データ
+    totalPrevUsd?: string;
+    totalPrevJpy?: string;
+    totalCurrUsd?: string;
+    totalCurrJpy?: string;
+    totalProfitPercent?: string;
+    totalProfitColor?: string;
   } | null>(null);
 
   const [amount, setAmount] = useState<string>('0');
@@ -40,7 +54,7 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
   const net = allNetworks[networkKey];
   const majorTokens = MAJOR_TOKENS_LIST[networkKey] || [];
 
-// 1. Balance Update
+  // 1. Balance Update
   useEffect(() => {
     const updateBalance = async () => {
       if (fromType === 'native') {
@@ -91,6 +105,17 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     setToInput(val);
   };
 
+  // ★追加: 割合入力ボタンハンドラ
+  const handlePercentInput = (percent: number) => {
+    if (!balance) return;
+    const balVal = parseFloat(balance);
+    if (isNaN(balVal) || balVal <= 0) return;
+    
+    // UI表示用として簡易実装
+    const val = balVal * (percent / 100);
+    setAmount(val.toString());
+  };
+
   const availableToTokens = [
     ...majorTokens.map(t => ({ symbol: t.symbol, address: t.address, name: t.name, type: 'Major' })),
     ...tokenList.map((t: TokenData) => ({ symbol: t.symbol, address: t.address, name: t.name, type: 'Held' }))
@@ -124,6 +149,7 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     const inputAmt = parseFloat(amount);
 
     const fromPriceUsd = fromType === 'native' ? (currentPrice?.usd || 0) : (selectedFromToken?.market?.usd.price || 0);
+    const fromPriceJpy = fromType === 'native' ? (currentPrice?.jpy || 0) : (selectedFromToken?.market?.jpy.price || 0);
     const toPriceUsd = searchedToken.price?.usd || 0;
 
     // FromトークンのCoinGecko ID特定
@@ -131,18 +157,8 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     if (fromType === 'native') {
         fromCoingeckoId = net.coingeckoId;
     } else if (selectedFromToken) {
-        // 主要トークンリストから検索
         const found = majorTokens.find(t => t.address.toLowerCase() === selectedFromToken.address.toLowerCase());
         if (found && found.coingeckoId) fromCoingeckoId = found.coingeckoId;
-    }
-
-    // ToトークンのCoinGecko ID特定
-    let toCoingeckoId: string | null = null;
-    if (searchedToken.symbol === net.symbol || searchedToken.symbol === `W${net.symbol}`) {
-        toCoingeckoId = net.coingeckoId;
-    } else {
-        const found = majorTokens.find(t => t.address.toLowerCase() === toInput.toLowerCase());
-        if (found && found.coingeckoId) toCoingeckoId = found.coingeckoId;
     }
 
     let currentRate = 0;
@@ -150,8 +166,9 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
       currentRate = fromPriceUsd / toPriceUsd;
     }
 
+    // 現在価値(今回売るものの現在の総額)
     const currentValueUsd = inputAmt * fromPriceUsd;
-    const currentValueJpy = inputAmt * (fromType === 'native' ? (currentPrice?.jpy || 0) : (selectedFromToken?.market?.jpy.price || 0));
+    const currentValueJpy = inputAmt * fromPriceJpy;
 
     // 履歴検索 (逆方向: Profit/Lossチェック用)
     const pairSymbolReverse = `${toSym} > ${fromSym}`;
@@ -162,84 +179,90 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     let prevRateStr = "No previous data";
     let isPrediction = false;
 
+    // 総額比較用
+    let totalPrevUsdStr = "---";
+    let totalPrevJpyStr = "---";
+    let totalProfitPercentStr = "---";
+    let totalProfitColor = "text-slate-400";
+
     if (prevTxReverse) {
+      // 過去のレート算出用変数
+      let histPriceUsd = 0; // 当時のFromトークン単価(USD)
+
       if (prevTxReverse.exchangeRate) {
-        // A. 正確なレートデータがある場合
+        // A. 正確なレートデータがある場合 (1 To = X From)
+        // Rate = Output / Input = From / To
+        // Cost of 1 From in To = 1 / Rate
         const prevCostRate = 1 / prevTxReverse.exchangeRate;
         const diff = (currentRate - prevCostRate) / prevCostRate * 100;
         profitPercentStr = (diff > 0 ? "+" : "") + diff.toFixed(2) + "%";
         profitColor = diff > 0 ? "text-green-400" : "text-red-400";
-        prevRateStr = `Prev: 1 ${fromSym} = ${prevCostRate.toFixed(4)} ${toSym}`;
+        // ★修正: 小さな値でも全桁表示
+        prevRateStr = `Prev: 1 ${fromSym} = ${formatFullNumber(prevCostRate)} ${toSym}`;
+      } 
+      
+      // B. 過去の単価・総額計算
+      isPrediction = true;
+      if (profitPercentStr === "---") prevRateStr = "Est. from History";
 
-      } else {
-        // B. 古いデータ (No rate) の場合 -> 予測ロジック
-        isPrediction = true;
-        prevRateStr = "Est. from History";
+      const isFromStable = STABLE_COINS.some(s => fromSym.includes(s));
+      const isToStable = STABLE_COINS.some(s => toSym.includes(s));
 
-        // ステーブルコイン判定
-        const isFromStable = STABLE_COINS.some(s => fromSym.includes(s));
-        const isToStable = STABLE_COINS.some(s => toSym.includes(s));
-
-        // パターン1: 両方ステーブルコイン (USDC <> USDT)
-        if (isFromStable && isToStable) {
+      if (isFromStable && isToStable) {
           profitPercentStr = "≈ 0.00%";
           profitColor = "text-slate-400";
           prevRateStr = "Est. (Stable Peg)";
-        }
+          histPriceUsd = 1; // Stable
+      }
+      else if (fromCoingeckoId) {
+          // 今回売るトークン(From)の、以前買った時の価格を取得
+          const p = await fetchHistoricalPrice(fromCoingeckoId, prevTxReverse.date);
+          if (p) {
+              histPriceUsd = p;
+              // 単価比較 (レートがない場合のバックアップ)
+              if (profitPercentStr === "---" || profitPercentStr.includes("Est")) {
+                  const diff = (fromPriceUsd - p) / p * 100;
+                  profitPercentStr = (diff > 0 ? "+" : "") + diff.toFixed(2) + "%";
+                  profitColor = diff > 0 ? "text-green-400" : "text-red-400";
+                  prevRateStr = `Est. Buy Price: $${formatFullNumber(p)}`;
+              }
+          }
+      }
+      
+      // 総額計算 (前回購入額 vs 現在売却額)
+      if (histPriceUsd > 0) {
+          const totalPrevUsd = inputAmt * histPriceUsd;
+          // JPYは簡易的に現在のレート(USD/JPY)を利用
+          const usdJpyRate = (currentPrice?.usd && currentPrice?.jpy) ? (currentPrice.jpy / currentPrice.usd) : 150;
+          const totalPrevJpy = totalPrevUsd * usdJpyRate;
 
-        // パターン2: 変動資産(Crypto) を売る場合 (PEPE -> USDC)
-        // 以前買った(USDC->PEPE) -> 今売る(PEPE->USDC)
-        // 比較: 「買った時のPEPE価格」 vs 「今のPEPE価格」
-        // 条件: 今回のFrom(PEPE)のIDがわかっていること
-        else if (fromCoingeckoId) {
-            const histPrice = await fetchHistoricalPrice(fromCoingeckoId, prevTxReverse.date);
-            if (histPrice) {
-                // (今の価格 - 昔の価格) / 昔の価格
-                const diff = (fromPriceUsd - histPrice) / histPrice * 100;
-                profitPercentStr = (diff > 0 ? "+" : "") + diff.toFixed(2) + "%";
-                profitColor = diff > 0 ? "text-green-400" : "text-red-400";
-                prevRateStr = `Est. Buy Price: $${histPrice.toFixed(6)}`; // PEPEなど単価安い場合考慮して桁数多め
-            } else {
-                prevRateStr = "Old data (Fetch Failed)";
-            }
-        }
-
-        // パターン3: 変動資産(Crypto) を買う場合 (USDC -> PEPE)
-        // 以前売った(PEPE->USDC) -> 今買い戻す(USDC->PEPE)
-        // 比較: 「売った時のPEPE価格」 vs 「今のPEPE価格」
-        // 安く買い戻せれば利益
-        // 条件: 今回のTo(PEPE)のIDがわかっていること
-        else if (toCoingeckoId) {
-            const histPrice = await fetchHistoricalPrice(toCoingeckoId, prevTxReverse.date);
-            if (histPrice) {
-                // (昔売った価格 - 今買う価格) / 今買う価格
-                const diff = (histPrice - toPriceUsd) / toPriceUsd * 100;
-                profitPercentStr = (diff > 0 ? "+" : "") + diff.toFixed(2) + "%";
-                profitColor = diff > 0 ? "text-green-400" : "text-red-400";
-                prevRateStr = `Est. Sold Price: $${histPrice.toFixed(6)}`;
-            } else {
-                prevRateStr = "Old data (Fetch Failed)";
-            }
-        }
-        else {
-          prevRateStr = "Old data (ID Unknown)";
-        }
+          totalPrevUsdStr = `$${formatFullNumber(totalPrevUsd)}`;
+          totalPrevJpyStr = `¥${formatFullNumber(totalPrevJpy)}`;
+          
+          const totalDiff = (currentValueUsd - totalPrevUsd) / totalPrevUsd * 100;
+          totalProfitPercentStr = (totalDiff > 0 ? "+" : "") + totalDiff.toFixed(2) + "%";
+          totalProfitColor = totalDiff > 0 ? "text-green-400" : "text-red-400";
       }
     }
 
     setComparisonData({
-      diffValueMain: `${(currentValueUsd / (currentPrice?.usd || 1)).toFixed(4)} ${net.symbol}`,
+      diffValueMain: `${formatFullNumber(currentValueUsd / (currentPrice?.usd || 1))} ${net.symbol}`,
       diffValueJpy: `¥${Math.floor(currentValueJpy).toLocaleString()}`,
       diffValueUsd: `$${currentValueUsd.toFixed(2)}`,
       profitPercent: profitPercentStr,
       profitColor,
       prevRateStr,
-      isPrediction
+      isPrediction,
+      // 総額データ
+      totalPrevUsd: totalPrevUsdStr,
+      totalPrevJpy: totalPrevJpyStr,
+      totalCurrUsd: `$${formatFullNumber(currentValueUsd)}`,
+      totalCurrJpy: `¥${formatFullNumber(currentValueJpy)}`,
+      totalProfitPercent: totalProfitPercentStr,
+      totalProfitColor
     });
   };
 
-  // ... (handleExecute などは変更なし)
-  // ... (Render部分も変更なし)
   const handleExecute = async () => {
     try {
       setLoading(true);
@@ -288,7 +311,15 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
       <Wrapper title="スワップ" backAction={() => setView('home')}>
         <GlassCard>
           {/* FROM SECTION */}
-          <p className="text-xs text-slate-400 mb-1">交換元 (Balance: {parseFloat(balance).toFixed(4)})</p>
+          <div className="flex justify-between items-end mb-1">
+             <p className="text-xs text-slate-400">交換元 (Balance: {parseFloat(balance).toFixed(4)})</p>
+             {/* ★追加: 割合入力ボタン */}
+             <div className="flex gap-1">
+               <button onClick={() => handlePercentInput(25)} className="text-[10px] bg-slate-800 px-2 py-1 rounded hover:bg-slate-700 text-cyan-200">25%</button>
+               <button onClick={() => handlePercentInput(50)} className="text-[10px] bg-slate-800 px-2 py-1 rounded hover:bg-slate-700 text-cyan-200">50%</button>
+               <button onClick={() => handlePercentInput(100)} className="text-[10px] bg-slate-800 px-2 py-1 rounded hover:bg-slate-700 text-cyan-200">MAX</button>
+             </div>
+          </div>
           <div className="flex gap-2 mb-4">
             <div className="flex-1">
               <Input
@@ -373,7 +404,7 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
     );
   }
 
-  // CONFIRM SECTION (そのまま)
+  // CONFIRM SECTION
   return (
     <Wrapper title="確認" backAction={() => setStep('input')}>
       <GlassCard>
@@ -393,29 +424,45 @@ export const SwapView = ({ networkKey, allNetworks, wallet, tokenList, setView, 
 
           {comparisonData && (
             <div className="bg-slate-900/50 p-3 rounded border border-slate-700 mt-2">
+              {/* 単価比較 */}
               <div className="flex justify-between items-end mb-2">
                 <span className="text-xs text-slate-400">
-                  Est. Profit/Loss
-                  {comparisonData.isPrediction && <span className="text-[9px] text-yellow-500 ml-1">(予測値)</span>}
+                  Unit Price Diff
+                  {comparisonData.isPrediction && <span className="text-[9px] text-yellow-500 ml-1">(Est)</span>}
                 </span>
                 <div className="text-right">
                   <div className={`font-bold ${comparisonData.profitColor} text-lg`}>{comparisonData.profitPercent}</div>
-                  <div className="text-[10px] text-slate-500">{comparisonData.prevRateStr}</div>
+                  {/* ★修正: 単価が小さくても全桁表示 */}
+                  <div className="text-[10px] text-slate-500 break-all">{comparisonData.prevRateStr}</div>
                 </div>
               </div>
+
               <div className="h-px bg-slate-800 my-2"></div>
+
+              {/* ★追加: 総額比較 (USD/JPY) */}
+              <div className="mb-2">
+                  <div className="flex justify-between items-center mb-1">
+                      <span className="text-xs text-slate-400">Total Value Diff</span>
+                      <span className={`font-bold ${comparisonData.totalProfitColor}`}>{comparisonData.totalProfitPercent}</span>
+                  </div>
+                  <div className="bg-slate-950/50 p-2 rounded text-[10px] font-mono space-y-1">
+                      <div className="flex justify-between">
+                          <span className="text-slate-500">Prev Buy:</span>
+                          <span className="text-slate-300">{comparisonData.totalPrevUsd} / {comparisonData.totalPrevJpy}</span>
+                      </div>
+                      <div className="flex justify-between">
+                          <span className="text-slate-500">Curr Sell:</span>
+                          <span className="text-cyan-200">{comparisonData.totalCurrUsd} / {comparisonData.totalCurrJpy}</span>
+                      </div>
+                  </div>
+              </div>
+              
+              <div className="h-px bg-slate-800 my-2"></div>
+              
               <div className="flex flex-col gap-1">
                 <div className="flex justify-between text-xs">
-                  <span>Main ({net.symbol}):</span>
+                  <span>Est. Value ({net.symbol}):</span>
                   <span className="text-cyan-200 font-mono">{comparisonData.diffValueMain}</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span>JPY:</span>
-                  <span className="text-cyan-200 font-mono">{comparisonData.diffValueJpy}</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span>USD:</span>
-                  <span className="text-slate-500 font-mono">{comparisonData.diffValueUsd}</span>
                 </div>
               </div>
             </div>

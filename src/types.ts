@@ -93,4 +93,5 @@ export type AlchemyHistory = {
   to: string;
   date: string;
   network: string;
+  receivedAmount?: string; // ★追加: これがないとAPI取得時に消えてしまいます
 };

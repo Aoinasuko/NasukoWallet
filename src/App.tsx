@@ -21,7 +21,6 @@ function App() {
   const [networkKey, setNetworkKey] = useState<string>('sepolia');
   const [allNetworks, setAllNetworks] = useState<Record<string, NetworkConfig>>(DEFAULT_NETWORKS);
   
-  // ★追加: メイン通貨設定の状態管理
   const [mainNetwork, setMainNetwork] = useState<string>('mainnet');
 
   const [wallet, setWallet] = useState<ethers.Wallet | ethers.HDNodeWallet | null>(null);
@@ -45,14 +44,11 @@ function App() {
 
   useEffect(() => { checkLoginStatus(); }, []);
 
-  // loadAssetsの定義
   const loadAssets = useCallback(async () => {
     if (!wallet) return;
     setIsAssetLoading(true);
-    // 残高更新
     updateBalance(wallet, allNetworks[networkKey].rpc);
     
-    // トークン・NFT取得
     const tokens = await fetchTokens(wallet.address, networkKey);
     setTokenList(tokens);
     const nfts = await fetchNfts(wallet.address, networkKey);
@@ -60,12 +56,11 @@ function App() {
     setIsAssetLoading(false);
   }, [wallet?.address, networkKey, allNetworks]);
 
-  // 資産ロード
   useEffect(() => {
     loadAssets();
   }, [loadAssets]);
 
-  // 履歴ロード
+  // 履歴ロード処理
   useEffect(() => {
     const loadHistory = async () => {
       if (!wallet) return;
@@ -74,7 +69,6 @@ function App() {
       const local = await chrome.storage.local.get(['historyCache']) as StorageLocal;
       const cache = local.historyCache?.[cacheKey];
       
-      // キャッシュ表示
       if (cache && cache.data.length > 0) {
         setTxHistory(cache.data);
         setHistoryLastUpdated(new Date(cache.lastUpdated).toLocaleString());
@@ -82,12 +76,35 @@ function App() {
         setTxHistory([]);
       }
 
-      // API取得
       try {
         const history = await fetchTransactionHistory(wallet.address, networkKey);
-        const formattedHistory: TxHistory[] = history.map((h: AlchemyHistory) => ({
-          id: h.id, hash: h.hash, type: h.type, amount: h.amount, symbol: h.symbol, from: h.from, to: h.to, date: h.date, network: allNetworks[networkKey]?.name || networkKey
-        }));
+        
+        // ★修正: APIデータからTxHistoryへ変換する際、レートを再計算する
+        const formattedHistory: TxHistory[] = history.map((h: AlchemyHistory) => {
+          let calculatedRate = undefined;
+          // スワップで、送信額と受信額が両方あればレート(受信/送信)を算出
+          if (h.type === 'swap' && h.amount && h.receivedAmount) {
+             const sent = parseFloat(h.amount);
+             const recv = parseFloat(h.receivedAmount);
+             if (sent > 0) calculatedRate = recv / sent;
+          }
+
+          return {
+            id: h.id, 
+            hash: h.hash, 
+            type: h.type, 
+            amount: h.amount, 
+            symbol: h.symbol, 
+            from: h.from, 
+            to: h.to, 
+            date: h.date, 
+            network: allNetworks[networkKey]?.name || networkKey,
+            receivedAmount: h.receivedAmount,
+            exchangeRate: calculatedRate, // 再計算したレートをセット
+            // priceInUsd等はAPI履歴には含まれないため、過去データではundefinedになる可能性があります
+          };
+        });
+
         setTxHistory(formattedHistory);
         const now = Date.now();
         setHistoryLastUpdated(new Date(now).toLocaleString());
@@ -101,7 +118,6 @@ function App() {
   // --- Functions ---
   const checkLoginStatus = async () => {
     const session = await chrome.storage.session.get(['masterPass']) as StorageSession;
-    // ★修正: mainNetworkも読み込む
     const local = await chrome.storage.local.get(['vault', 'accounts', 'network', 'bgImage', 'customNetworks', 'mainNetwork']) as StorageLocal & { mainNetwork?: string };
     
     if (local.accounts) setSavedAccounts(local.accounts);
@@ -110,7 +126,7 @@ function App() {
     const net = (local.network && merged[local.network]) ? local.network : 'sepolia';
     setNetworkKey(net);
     if (local.bgImage) setBgImage(local.bgImage);
-    if (local.mainNetwork) setMainNetwork(local.mainNetwork); // メイン通貨設定
+    if (local.mainNetwork) setMainNetwork(local.mainNetwork);
 
     if (!local.vault) setView('setup');
     else if (session.masterPass) { setSessionMasterPass(session.masterPass); setView('list'); fetchPrice(merged[net]); } 
@@ -126,7 +142,6 @@ function App() {
     if (wallet) updateBalance(wallet, net.rpc);
   };
   
-  // ★追加: メイン通貨変更ハンドラ
   const handleSetMainNetwork = async (key: string) => {
     setMainNetwork(key);
     await chrome.storage.local.set({ mainNetwork: key });
@@ -204,7 +219,6 @@ function App() {
       />
     );
     if (view === 'settings_account') return <SettingsAccountView privateKey={wallet.privateKey} setView={setView} />;
-    // ★修正: 必要なProps (mainNetwork, onSetMainNetwork, allNetworks) を渡す
     if (view === 'settings_general') return (
         <SettingsGeneralView 
             bgImage={bgImage} 
@@ -222,8 +236,16 @@ function App() {
   if (view === 'list') return <AccountListView accounts={savedAccounts} onUnlock={handleUnlockAccount} onDelete={handleDeleteAccount} onAdd={() => setView('import')} />;
   if (view === 'import') return <ImportView onImport={handleImport} onCancel={() => setView('list')} />;
   if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;
-  // ★修正: ここも同様にPropsを渡す（未ログイン時の設定画面呼び出しを考慮する場合、ただし構成上ここは通らないかも）
-  if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} mainNetwork={mainNetwork} onSetMainNetwork={handleSetMainNetwork} allNetworks={allNetworks} setView={setView} />;
+  if (view === 'settings_general') return (
+    <SettingsGeneralView 
+        bgImage={bgImage} 
+        onSetBg={handleSetBg} 
+        mainNetwork={mainNetwork} 
+        onSetMainNetwork={handleSetMainNetwork}
+        allNetworks={allNetworks}
+        setView={setView} 
+    />
+  );
 
   return <div className="text-slate-500 p-10 text-center text-xs">Error: Unknown View ({view})</div>;
 }

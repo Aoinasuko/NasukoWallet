@@ -24,8 +24,7 @@ const COINGECKO_PLATFORMS: Record<string, string> = {
   astar: "astar",
 };
 
-// ★修正1: 有名なトークンのDecimalsをハードコードして補完するマップを作成
-// 特にSepoliaのUSDC Faucetはメタデータが不安定な場合があるため重要
+// 有名なトークンのDecimalsをハードコードして補完するマップ
 const KNOWN_DECIMALS: Record<string, number> = {
   // Sepolia USDC
   "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238": 6,
@@ -52,7 +51,6 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
       balances.tokenBalances.map(async (token) => {
         if (!token.tokenBalance) return;
         
-        // アドレスを小文字化して比較用にする
         const contractAddrLower = token.contractAddress.toLowerCase();
 
         let decimals = 18;
@@ -62,8 +60,6 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
 
         try {
           const metadata = await alchemy.core.getTokenMetadata(token.contractAddress);
-          // メタデータがあれば使用、なければデフォルト
-          // ★修正2: ここでmetadata.decimalsがnullでも、KNOWN_DECIMALSにあればそちらを優先
           if (KNOWN_DECIMALS[contractAddrLower]) {
             decimals = KNOWN_DECIMALS[contractAddrLower];
           } else if (metadata.decimals !== null && metadata.decimals !== undefined) {
@@ -76,18 +72,13 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
 
         } catch (e) { 
           console.warn("Metadata fetch error for:", token.contractAddress); 
-          // ★修正3: エラー時でも、既知のトークンなら救済する
           if (KNOWN_DECIMALS[contractAddrLower]) {
             decimals = KNOWN_DECIMALS[contractAddrLower];
-            // 必要ならシンボルなども補完可能だが、最低限Decimalsがあれば計算は合う
           }
         }
 
-        // バランス計算
         const balanceFormatted = ethers.formatUnits(token.tokenBalance, decimals);
         
-        // ★修正4: USDC(6桁)を18桁で計算してしまった場合の極小値誤検知を防ぐため、
-        // 上記のDecimals補正が非常に重要。補正済みならこのフィルタは正しく機能する。
         if (parseFloat(balanceFormatted) < 0.0001) return;
 
         tokens.push({
@@ -101,7 +92,7 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
       })
     );
 
-    // CoinGeckoで価格取得 (変更なし)
+    // CoinGeckoで価格取得
     const platform = COINGECKO_PLATFORMS[networkKey];
     if (platform && contractAddresses.length > 0) {
       try {
@@ -131,9 +122,7 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
   }
 };
 
-// ... (fetchNfts, fetchTransactionHistory は変更なし)
 export const fetchNfts = async (address: string, networkKey: string): Promise<NftData[]> => {
-    // (省略: 元のコードと同じ)
     const network = NETWORK_MAP[networkKey];
     if (!network) return [];
     const config = { apiKey: API_KEY, network };
@@ -149,7 +138,6 @@ export const fetchNfts = async (address: string, networkKey: string): Promise<Nf
 };
 
 export const fetchTransactionHistory = async (address: string, networkKey: string): Promise<AlchemyHistory[]> => {
-    // (省略: 元のコードと同じ)
     const network = NETWORK_MAP[networkKey];
     if (!network) return [];
     const config = { apiKey: API_KEY, network };
@@ -193,7 +181,21 @@ export const fetchTransactionHistory = async (address: string, networkKey: strin
           const sentSymbol = sentAsset ? sentAsset.asset : "???";
           const recvSymbol = receivedAsset ? receivedAsset.asset : (isSwapToRouter ? "Token" : "???");
           const sentAmount = sentAsset ? sentAsset.value?.toFixed(4) : "0";
-          history.push({ id: hash, hash: hash, type: 'swap', amount: sentAmount, symbol: `${sentSymbol} > ${recvSymbol}`, from: myAddr, to: myAddr, date: date, network: networkKey });
+          // ★修正: 受け取り額を取得
+          const recvAmount = receivedAsset ? receivedAsset.value?.toFixed(4) : "0";
+
+          history.push({ 
+            id: hash, 
+            hash: hash, 
+            type: 'swap', 
+            amount: sentAmount, 
+            symbol: `${sentSymbol} > ${recvSymbol}`, 
+            from: myAddr, 
+            to: myAddr, 
+            date: date, 
+            network: networkKey,
+            receivedAmount: recvAmount // ★追加: ここでセット
+          });
         } else {
           if (sent.length > 0) {
             sent.forEach(tx => { history.push({ id: tx.uniqueId, hash: tx.hash, type: 'send', amount: tx.value?.toFixed(4) || "0", symbol: tx.asset || "ETH", from: tx.from, to: tx.to, date: date, network: networkKey }); });
@@ -211,7 +213,6 @@ export const fetchTransactionHistory = async (address: string, networkKey: strin
     } catch (error) { console.error("Alchemy History Error:", error); return []; }
 };
 
-// ★追加: 指定したトークンアドレスのメタデータと価格を取得する関数
 export const fetchTokenMetadataAndPrice = async (address: string, networkKey: string) => {
   const network = NETWORK_MAP[networkKey];
   if (!network || !ethers.isAddress(address)) return null;
@@ -220,11 +221,9 @@ export const fetchTokenMetadataAndPrice = async (address: string, networkKey: st
   const alchemy = new Alchemy(config);
 
   try {
-    // 1. メタデータ取得
     const metadata = await alchemy.core.getTokenMetadata(address);
     if (!metadata.symbol) return null;
 
-    // 2. 価格取得 (CoinGecko)
     let price = { usd: 0, jpy: 0 };
     const platform = COINGECKO_PLATFORMS[networkKey];
     
