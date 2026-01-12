@@ -118,3 +118,36 @@ export const updateTokenPrices = async (tokens: TokenData[], networkKey: string)
 
   return tokens;
 };
+
+// ★追加: 日付文字列からAPI用の DD-MM-YYYY 形式に変換
+const formatDateForApi = (dateStr: string): string | null => {
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return null;
+    const d = String(date.getDate()).padStart(2, '0');
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const y = date.getFullYear();
+    return `${d}-${m}-${y}`;
+  } catch {
+    return null;
+  }
+};
+
+// ★追加: 過去の価格を取得する関数
+export const fetchHistoricalPrice = async (coingeckoId: string, dateStr: string): Promise<number | null> => {
+  const apiDate = formatDateForApi(dateStr);
+  if (!apiDate || !coingeckoId) return null;
+
+  try {
+    const url = `https://api.coingecko.com/api/v3/coins/${coingeckoId}/history?date=${apiDate}&localization=false`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    
+    const data = await res.json();
+    // USD価格を返す
+    return data.market_data?.current_price?.usd || null;
+  } catch (e) {
+    console.warn("Historical price fetch failed:", e);
+    return null;
+  }
+};
