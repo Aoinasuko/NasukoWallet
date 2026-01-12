@@ -16,14 +16,14 @@ export const executeSwap = async (
   // Check support
   const addresses = UNISWAP_ADDRESSES[networkKey];
   if (!addresses) {
-    throw new Error(`Real swap not supported on ${networkKey}. Only Sepolia is supported.`);
+    throw new Error(`Real swap not supported on ${networkKey}. Only Sepolia and Mainnet are supported.`);
   }
 
   // Determine standard symbols (handle "SepoliaETH" vs "ETH")
   const isNativeFrom = fromTokenSymbol.includes('ETH') || fromTokenSymbol === 'SepoliaETH';
 
   if (!isNativeFrom) {
-     throw new Error("Only Native ETH swaps are supported for testing in this version.");
+     throw new Error("Only Native ETH swaps are supported in this version.");
   }
 
   // Resolve ToToken
