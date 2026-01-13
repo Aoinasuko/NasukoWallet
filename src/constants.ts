@@ -75,8 +75,7 @@ export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; U
   },
   polygon: {
     ROUTER: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
-    WETH: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" // WMATIC (wrapped native), // WMATIC on Polygon is usually just wrapped native, but here WETH on Polygon
-    // Polygon Native is POL/MATIC. WETH is 0x7ce...
+    WETH: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
     USDC: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
     MATIC: "0x0000000000000000000000000000000000001010", // Native Token System Contract
   },
