@@ -1,5 +1,3 @@
-// src/components/views/SwapView.tsx
-
 import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { Wrapper } from '../Layout';
@@ -7,12 +5,11 @@ import { GlassCard, Button, Input } from '../UI';
 import { executeSwap } from '../../services/swapService';
 import { fetchTokenMetadataAndPrice } from '../../alchemy';
 import { MAJOR_TOKENS_LIST } from '../../constants';
-// ★重要: 型定義のインポート元を確認 (ProfitCalculationResultを使うため)
 import { calculateSwapProfit, type ProfitCalculationResult } from '../../services/profitService';
+import { fetchCurrentPrice } from '../../services/priceService'; // ★追加
 import type { TxHistory, TokenData } from '../../types';
 
 export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenList, setView, onSwap, txHistory, currentPrice, mainCurrencyPrice }: any) => {
-  // ... (State定義などは既存のまま)
   const [step, setStep] = useState<'input' | 'confirm'>('input');
   const [loading, setLoading] = useState(false);
 
@@ -34,7 +31,6 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
   const mainNet = allNetworks[mainNetwork] || net;
   const majorTokens = MAJOR_TOKENS_LIST[networkKey] || [];
 
-  // ... (useEffect: updateBalance, searchToken などは変更なし) ...
   // Balance Update
   useEffect(() => {
     const updateBalance = async () => {
@@ -75,7 +71,58 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
     return () => clearTimeout(timer);
   }, [toInput, networkKey]);
 
-  // ... (Handlers: handleSelectFrom, handleSelectTo, handlePercentInput, handleProceed, handleExecute も変更なし) ...
+  // ★追加: 確認画面での5秒定期更新
+  useEffect(() => {
+    if (step !== 'confirm') return;
+
+    const refreshData = async () => {
+      // 1. Toトークン価格更新
+      const toInfo = await fetchTokenMetadataAndPrice(toInput, networkKey);
+      
+      // 2. Fromトークン価格更新
+      let newFromPrice = 0;
+      let newCurrentPrice = currentPrice;
+
+      // Native価格の更新
+      if (net.coingeckoId) {
+          const cp = await fetchCurrentPrice(net.coingeckoId);
+          if (cp) newCurrentPrice = cp;
+      }
+
+      if (fromType === 'native') {
+          newFromPrice = newCurrentPrice?.usd || 0;
+      } else if (selectedFromToken?.address) {
+          const res = await fetchTokenMetadataAndPrice(selectedFromToken.address, networkKey);
+          newFromPrice = res?.price?.usd || 0;
+      }
+
+      // 3. 再計算
+      const result = await calculateSwapProfit({
+        amount,
+        fromType,
+        selectedFromToken,
+        searchedToken: toInfo || searchedToken,
+        toInput,
+        net,
+        mainNet,
+        majorTokens,
+        currentPrice: newCurrentPrice, // 最新のNative価格
+        mainCurrencyPrice,
+        txHistory,
+        fetchedFromPrice: newFromPrice
+      });
+
+      // 4. State更新
+      if (toInfo) setSearchedToken(toInfo);
+      if (newFromPrice > 0) setFetchedFromPrice(newFromPrice);
+      setComparisonData(result);
+    };
+
+    const interval = setInterval(refreshData, 5000); // 5秒ごとに更新
+    return () => clearInterval(interval);
+  }, [step, toInput, networkKey, fromType, selectedFromToken, amount, net, mainNet, majorTokens, txHistory, mainCurrencyPrice, currentPrice]);
+
+
   const handleSelectFrom = (e: any) => {
     const val = e.target.value;
     if (val === 'NATIVE') {
@@ -254,7 +301,6 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
               <div>
                  <div className="flex justify-between items-center mb-1">
                     <span className="text-xs text-slate-400">Unit Price {comparisonData.isPrediction && "(Est)"}</span>
-                    {/* ★修正: title属性にreasonを設定してホバー表示 */}
                     <span 
                         className={`font-bold ${comparisonData.unitProfitColor} cursor-help`}
                         title={comparisonData.reason || "直近の逆方向取引と比較しています"}

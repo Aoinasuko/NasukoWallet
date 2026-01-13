@@ -6,6 +6,7 @@ import './App.css';
 import { DEFAULT_NETWORKS } from './constants';
 import type { SavedAccount, VaultData, StorageSession, StorageLocal, TxHistory, NetworkConfig, TokenData, NftData, AlchemyHistory } from './types';
 import { fetchTokens, fetchNfts, fetchTransactionHistory } from './alchemy';
+import { fetchCurrentPrice } from './services/priceService';
 
 import { WelcomeView, Setup2FAView, LoginView } from './components/views/Auth';
 import { HomeView } from './components/views/HomeView';
@@ -61,7 +62,7 @@ function App() {
     loadAssets();
   }, [loadAssets]);
 
-  // 履歴ロード（★重要: データの結合処理を強化）
+  // 履歴ロード
   useEffect(() => {
     const loadHistory = async () => {
       if (!wallet) return;
@@ -70,7 +71,6 @@ function App() {
       const local = await chrome.storage.local.get(['historyCache']) as StorageLocal;
       const cache = local.historyCache?.[cacheKey];
       
-      // キャッシュが存在すれば、まずはそれをセット
       let cachedHistory: TxHistory[] = [];
       if (cache && cache.data.length > 0) {
         cachedHistory = cache.data;
@@ -80,45 +80,42 @@ function App() {
         setTxHistory([]);
       }
 
-      // APIから最新履歴を取得し、キャッシュと結合
       try {
         const fetchedHistory = await fetchTransactionHistory(wallet.address, networkKey);
-        
-        // 既存の履歴データ（価格情報などを含む）をハッシュマップ化
-        // これにより、SwapViewで保存した `priceInUsd` などを検索できるようにする
         const existingMap = new Map(cachedHistory.map((t: TxHistory) => [t.hash, t]));
 
         const mergedHistory: TxHistory[] = fetchedHistory.map((h: AlchemyHistory) => {
-          // 同じハッシュ（取引ID）を持つ既存データがあれば取得
           const existing = existingMap.get(h.hash);
           
-          // レートや価格情報は、既存データにあればそれを優先して維持する
-          // なければ計算やundefinedとする
-          let calculatedRate = existing?.exchangeRate;
           let priceInUsd = existing?.priceInUsd;
           let priceInJpy = existing?.priceInJpy;
-
-          // 新規取得データでレート計算が可能な場合（まだ計算されていない場合など）
-          if (!calculatedRate && h.type === 'swap' && h.amount && h.receivedAmount) {
+          
+          // レート再計算ロジック (バグ修正用)
+          let calculatedRate = undefined;
+          if (h.type === 'swap' && h.amount && h.receivedAmount) {
              const sent = parseFloat(h.amount);
              const recv = parseFloat(h.receivedAmount);
-             if (sent > 0) calculatedRate = recv / sent;
+             if (sent > 0) {
+                 calculatedRate = recv / sent;
+             }
+          } else if (existing?.exchangeRate) {
+             calculatedRate = existing.exchangeRate;
           }
 
           return {
             id: h.id, 
             hash: h.hash, 
             type: h.type, 
-            amount: h.amount, // ★修正済みの全桁文字列
+            amount: h.amount, 
             symbol: h.symbol, 
             from: h.from, 
             to: h.to, 
             date: h.date, 
             network: allNetworks[networkKey]?.name || networkKey,
-            receivedAmount: h.receivedAmount, // ★修正済みの全桁文字列
+            receivedAmount: h.receivedAmount,
             exchangeRate: calculatedRate, 
-            priceInUsd: priceInUsd, // ★重要: アプリ内で保存した価格情報を引き継ぐ
-            priceInJpy: priceInJpy  // ★重要: 同上
+            priceInUsd: priceInUsd, 
+            priceInJpy: priceInJpy 
           };
         });
 
@@ -126,15 +123,14 @@ function App() {
         const now = Date.now();
         setHistoryLastUpdated(new Date(now).toLocaleString());
         
-        // 更新したデータを保存
         const newCache = { ...(local.historyCache || {}), [cacheKey]: { lastUpdated: now, data: mergedHistory } };
         await chrome.storage.local.set({ historyCache: newCache });
       } catch (e) { console.error("History sync failed", e); }
     };
     if (wallet) loadHistory();
-  }, [wallet?.address, networkKey, view]); // 依存配列は維持
+  }, [wallet?.address, networkKey, view]);
 
-  // ... (以下、checkLoginStatusなどの関数は既存と同じ) ...
+  // --- Functions ---
   const checkLoginStatus = async () => {
     const session = await chrome.storage.session.get(['masterPass']) as StorageSession;
     const local = await chrome.storage.local.get(['vault', 'accounts', 'network', 'bgImage', 'customNetworks', 'mainNetwork']) as StorageLocal & { mainNetwork?: string };
@@ -175,25 +171,20 @@ function App() {
   const fetchPrices = async (currentNet: NetworkConfig, mainNet?: NetworkConfig) => {
     const currentId = currentNet.coingeckoId;
     if (currentId) {
-      const tryFetch = async (id: string) => { const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd,jpy&include_24hr_change=true`); if (!res.ok) throw new Error("API Error"); return await res.json(); };
-      try { 
-        let data = await tryFetch(currentId); 
-        if (currentId === "polygon-ecosystem-token" && (!data || !data[currentId])) { data = await tryFetch("matic-network"); } 
-        const res = data[currentId] || data["matic-network"];
-        if(res) { setCurrentPrice({ usd: res.usd, jpy: res.jpy, usdChange: res.usd_24h_change || 0, jpyChange: res.jpy_24h_change || 0 }); }
-      } catch(e) { /* ignore */ }
+      const res = await fetchCurrentPrice(currentId);
+      if (res) {
+        setCurrentPrice(res);
+      }
     } else {
       setCurrentPrice(null);
     }
 
     const mainId = mainNet?.coingeckoId;
     if (mainId) {
-       try {
-         const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${mainId}&vs_currencies=usd,jpy`);
-         const data = await res.json();
-         const p = data[mainId] || data["matic-network"]; 
-         if (p) setMainCurrencyPrice({ usd: p.usd, jpy: p.jpy });
-       } catch(e) { setMainCurrencyPrice(null); }
+       const res = await fetchCurrentPrice(mainId);
+       if (res) {
+         setMainCurrencyPrice({ usd: res.usd, jpy: res.jpy });
+       }
     } else {
        setMainCurrencyPrice(null);
     }
@@ -209,6 +200,24 @@ function App() {
       const bal = await provider.getBalance(connected.address); 
       setBalance(ethers.formatEther(bal)); 
     } catch (e) { setBalance('0'); }
+  };
+
+  // ★追加: 履歴リセットハンドラ
+  const handleResetHistory = async () => {
+    if (!confirm("取引履歴とキャッシュを全てリセットしますか？\n（ブロックチェーン上のデータは消えませんが、アプリ内の損益計算用データは削除されます）")) return;
+    
+    setTxHistory([]);
+    setHistoryLastUpdated(null);
+    
+    try {
+      await chrome.storage.local.remove(['historyCache', 'history', 'priceCache']);
+      alert("履歴をリセットしました。画面を再読み込みしてください。");
+      // 必要であればリロード
+      // window.location.reload(); 
+    } catch (e) {
+      console.error("Reset failed", e);
+      alert("リセットに失敗しました");
+    }
   };
 
   const handleStartSetup = (pass: string, secret: any, qr: string) => { setMasterPass(pass); setTempSecret(secret); setQrDataUrl(qr); setView('2fa_setup'); };
@@ -257,6 +266,8 @@ function App() {
         mainCurrencyPrice={mainCurrencyPrice}
       />
     );
+    // ★修正: settings_menu をここに移動
+    if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;
     if (view === 'settings_account') return <SettingsAccountView privateKey={wallet.privateKey} setView={setView} />;
     if (view === 'settings_general') return (
         <SettingsGeneralView 
@@ -266,6 +277,7 @@ function App() {
             onSetMainNetwork={handleSetMainNetwork}
             allNetworks={allNetworks}
             setView={setView} 
+            onResetHistory={handleResetHistory} // ★追加: 履歴リセット機能渡し
         />
     );
     if (view === 'settings_network_list') return <SettingsNetworkListView allNetworks={allNetworks} onDelete={handleDeleteNetwork} setView={setView} />;
@@ -274,8 +286,8 @@ function App() {
 
   if (view === 'list') return <AccountListView accounts={savedAccounts} onUnlock={handleUnlockAccount} onDelete={handleDeleteAccount} onAdd={() => setView('import')} />;
   if (view === 'import') return <ImportView onImport={handleImport} onCancel={() => setView('list')} />;
-  if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;
-  if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} mainNetwork={mainNetwork} onSetMainNetwork={handleSetMainNetwork} allNetworks={allNetworks} setView={setView} />;
+  // (settings_general は未ログインでもアクセス可能にしておく)
+  if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} mainNetwork={mainNetwork} onSetMainNetwork={handleSetMainNetwork} allNetworks={allNetworks} setView={setView} onResetHistory={handleResetHistory} />;
 
   return <div className="text-slate-500 p-10 text-center text-xs">Error: Unknown View ({view})</div>;
 }

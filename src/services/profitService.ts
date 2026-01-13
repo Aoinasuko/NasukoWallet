@@ -82,7 +82,6 @@ export const calculateSwapProfit = async ({
 
   // --- CoinGecko ID & Native Check ---
   
-  // From Token ID
   let fromCoingeckoId: string | null = null;
   if (fromType === 'native') {
     fromCoingeckoId = net.coingeckoId;
@@ -91,15 +90,12 @@ export const calculateSwapProfit = async ({
     if (found && found.coingeckoId) fromCoingeckoId = found.coingeckoId;
   }
 
-  // To Token ID & Native Check
   let toCoingeckoId: string | null = null;
-  
-  // Native判定: Symbol一致 or アドレス一致 or 特定のWrappedトークン
   const isToNative = searchedToken.symbol === net.symbol || 
                      (net.symbol === 'ETH' && searchedToken.symbol === 'WETH') ||
                      (net.symbol === 'MATIC' && searchedToken.symbol === 'WMATIC') ||
                      (net.symbol === 'POL' && searchedToken.symbol === 'WPOL') ||
-                     (net.symbol === 'POL' && searchedToken.symbol === 'MATIC'); // Polygon migration対応
+                     (net.symbol === 'POL' && searchedToken.symbol === 'MATIC');
 
   if (isToNative) {
     toCoingeckoId = net.coingeckoId;
@@ -111,18 +107,23 @@ export const calculateSwapProfit = async ({
 
   // --- 現在価格の決定 ---
 
-  // From単価 (USD)
   let fromPriceUsd = fetchedFromPrice || 0;
   if (fromPriceUsd === 0) {
     fromPriceUsd = fromType === 'native'
       ? (currentPrice?.usd || 0)
       : (selectedFromToken?.market?.usd.price || 0);
   }
-
-  // To単価 (USD)
-  let toPriceUsd = searchedToken.price?.usd || 0;
   
-  // ★修正: ToがNativeの場合、API取得価格が0なら currentPrice (Native価格) を使う
+  // FromがNative系で0の場合のフォールバック
+  if (fromPriceUsd === 0 && selectedFromToken) {
+      const sym = selectedFromToken.symbol.toUpperCase();
+      const netSym = net.symbol.toUpperCase();
+      if (sym === `W${netSym}` || sym === netSym || sym === "MATIC") {
+          fromPriceUsd = currentPrice?.usd || 0;
+      }
+  }
+
+  let toPriceUsd = searchedToken.price?.usd || 0;
   if (isToNative && toPriceUsd === 0 && currentPrice?.usd) {
       toPriceUsd = currentPrice.usd;
   }
@@ -137,7 +138,6 @@ export const calculateSwapProfit = async ({
     const currentTo = normalize(toSym);
     const currentFrom = normalize(fromSym);
 
-    // 逆方向チェック
     return hFrom === currentTo && hTo === currentFrom;
   });
 
@@ -168,13 +168,11 @@ export const calculateSwapProfit = async ({
     // =========================================================
 
     if (isFromStable && isToStable) {
-      // パターンA: ステーブル同士
       histUnitPriceUsd = 1.0;
       displayHistUnitPrice = "$1.00 (Stable)";
     }
     else if (!isFromStable && fromCoingeckoId) {
       // パターンB: 売り (Crypto -> Stable/Other)
-      // 以前買った(Stable->Crypto)
       if (isToStable && prevTxReverse.exchangeRate) {
         histUnitPriceUsd = 1 / prevTxReverse.exchangeRate;
       }
@@ -190,9 +188,6 @@ export const calculateSwapProfit = async ({
     }
     else if (!isToStable) {
       // パターンC: 買い戻し (Stable/Other -> Crypto) 
-      // 例: USDC -> MATIC
-      
-      // 優先1: 履歴データの priceInUsd (過去に売った時のFrom単価)
       if (prevTxReverse.priceInUsd && prevTxReverse.priceInUsd > 0) {
           const p = prevTxReverse.priceInUsd;
           if (toPriceUsd > 0) {
@@ -205,7 +200,6 @@ export const calculateSwapProfit = async ({
              reason = "現在の購入対象(To)の価格が取得できていません。";
           }
       }
-      // 優先2: IDがあるならAPI
       else if (toCoingeckoId) {
           isPrediction = true;
           const p = await fetchHistoricalPrice(toCoingeckoId, prevTxReverse.date);
@@ -268,7 +262,6 @@ export const calculateSwapProfit = async ({
 
       totalDiffUsd = (totalDiffVal >= 0 ? "+" : "") + formatFullNumber(totalDiffVal);
 
-      // JPY換算
       const usdJpyRate = (currentPrice?.usd && currentPrice?.jpy) ? (currentPrice.jpy / currentPrice.usd) : 150;
       const totalDiffValJpy = totalDiffVal * usdJpyRate;
       totalDiffJpy = (totalDiffValJpy >= 0 ? "+" : "") + formatFullNumber(totalDiffValJpy);
@@ -277,7 +270,6 @@ export const calculateSwapProfit = async ({
     }
   }
 
-  // 基礎通貨換算
   const currentValueUsd = inputAmt * fromPriceUsd;
   let diffValueMainStr = "---";
   if (mainCurrencyPrice?.usd && mainCurrencyPrice.usd > 0) {

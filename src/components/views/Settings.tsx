@@ -1,4 +1,3 @@
-// src/components/views/Settings.tsx
 import { useState } from 'react';
 import { GlassCard, Input, Button, SmartIcon } from '../UI';
 import { Wrapper } from '../Layout';
@@ -10,7 +9,7 @@ export const SettingsMenuView = ({ setView }: any) => (
       {[
         { id: 'settings_network_list', icon: '🌐', title: 'ネットワーク設定', desc: 'RPCの追加・編集' },
         { id: 'settings_account', icon: '🔐', title: 'アカウント設定', desc: '秘密鍵の確認' },
-        { id: 'settings_general', icon: '🎨', title: '一般設定', desc: '背景画像の変更' },
+        { id: 'settings_general', icon: '🎨', title: '一般設定', desc: '背景画像・データ管理' },
       ].map((item) => (
         <GlassCard key={item.id} className="cursor-pointer hover:bg-cyan-900/10 hover:border-cyan-500/30 transition group">
           <div onClick={() => setView(item.id)} className="flex items-center gap-4">
@@ -23,7 +22,7 @@ export const SettingsMenuView = ({ setView }: any) => (
   </Wrapper>
 );
 
-// 2. Account Settings
+// 2. Account Settings (変更なし)
 export const SettingsAccountView = ({ privateKey, setView }: any) => {
   const [show, setShow] = useState(false);
   return (
@@ -41,8 +40,8 @@ export const SettingsAccountView = ({ privateKey, setView }: any) => {
   );
 };
 
-// 3. General Settings
-export const SettingsGeneralView = ({ bgImage, onSetBg, mainNetwork, onSetMainNetwork, allNetworks, setView }: any) => {
+// 3. General Settings (履歴リセット追加)
+export const SettingsGeneralView = ({ bgImage, onSetBg, mainNetwork, onSetMainNetwork, allNetworks, setView, onResetHistory }: any) => {
   const onChange = (e: any) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -68,7 +67,7 @@ export const SettingsGeneralView = ({ bgImage, onSetBg, mainNetwork, onSetMainNe
         </select>
       </GlassCard>
 
-      <GlassCard>
+      <GlassCard className="mb-4">
         <h3 className="font-bold mb-4 text-cyan-100">背景画像の設定</h3>
         {bgImage ? (
           <div className="mb-4"><img src={bgImage} className="w-full h-32 object-cover rounded-lg border border-slate-600" /><div className="mt-4"><Button variant="secondary" onClick={() => onSetBg(null)}>リセット</Button></div></div>
@@ -79,11 +78,18 @@ export const SettingsGeneralView = ({ bgImage, onSetBg, mainNetwork, onSetMainNe
           </div>
         )}
       </GlassCard>
+
+      {/* ★追加: 履歴リセット */}
+      <GlassCard>
+        <h3 className="font-bold mb-2 text-red-400">データ管理</h3>
+        <p className="text-xs text-slate-400 mb-3">アプリ内の取引履歴キャッシュと価格データを削除します。</p>
+        <Button variant="secondary" onClick={onResetHistory} className="border-red-900/50 text-red-300 hover:bg-red-900/20">履歴をリセット</Button>
+      </GlassCard>
     </Wrapper>
   );
 };
 
-// 4. Network List
+// 4. Network List (変更なし)
 export const SettingsNetworkListView = ({ allNetworks, onDelete, setView }: any) => (
   <Wrapper title="ネットワーク" backAction={() => setView('settings_menu')}>
     <div className="flex flex-col gap-2 mb-4">
@@ -101,7 +107,7 @@ export const SettingsNetworkListView = ({ allNetworks, onDelete, setView }: any)
   </Wrapper>
 );
 
-// 5. Network Add
+// 5. Network Add (変更なし)
 export const SettingsNetworkAddView = ({ onAdd, setView }: any) => {
   const [form, setForm] = useState({ name: '', rpc: '', id: '', symbol: '', explorer: '', logo: '' });
   
