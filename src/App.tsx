@@ -21,19 +21,13 @@ function App() {
   const [networkKey, setNetworkKey] = useState<string>('sepolia');
   const [allNetworks, setAllNetworks] = useState<Record<string, NetworkConfig>>(DEFAULT_NETWORKS);
   
-  // 設定されたメインネットワーク（基礎通貨）
   const [mainNetwork, setMainNetwork] = useState<string>('mainnet');
 
   const [wallet, setWallet] = useState<ethers.Wallet | ethers.HDNodeWallet | null>(null);
   const [balance, setBalance] = useState('0');
   const [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
-  
-  // currentPrice: 現在接続中のネットワーク通貨の価格
   const [currentPrice, setCurrentPrice] = useState<{usd: number, jpy: number, usdChange: number, jpyChange: number} | null>(null);
-  
-  // ★追加: mainCurrencyPrice: 設定された基礎通貨(mainNetwork)の価格
   const [mainCurrencyPrice, setMainCurrencyPrice] = useState<{usd: number, jpy: number} | null>(null);
-
   const [currency, setCurrency] = useState<'JPY' | 'USD'>('JPY');
   
   const [tokenList, setTokenList] = useState<TokenData[]>([]);
@@ -67,7 +61,7 @@ function App() {
     loadAssets();
   }, [loadAssets]);
 
-  // 履歴ロード（レート計算修正済み）
+  // 履歴ロード（★重要: データの結合処理を強化）
   useEffect(() => {
     const loadHistory = async () => {
       if (!wallet) return;
@@ -76,39 +70,71 @@ function App() {
       const local = await chrome.storage.local.get(['historyCache']) as StorageLocal;
       const cache = local.historyCache?.[cacheKey];
       
+      // キャッシュが存在すれば、まずはそれをセット
+      let cachedHistory: TxHistory[] = [];
       if (cache && cache.data.length > 0) {
-        setTxHistory(cache.data);
+        cachedHistory = cache.data;
+        setTxHistory(cachedHistory);
         setHistoryLastUpdated(new Date(cache.lastUpdated).toLocaleString());
       } else {
         setTxHistory([]);
       }
 
+      // APIから最新履歴を取得し、キャッシュと結合
       try {
-        const history = await fetchTransactionHistory(wallet.address, networkKey);
-        const formattedHistory: TxHistory[] = history.map((h: AlchemyHistory) => {
-          let calculatedRate = undefined;
-          if (h.type === 'swap' && h.amount && h.receivedAmount) {
+        const fetchedHistory = await fetchTransactionHistory(wallet.address, networkKey);
+        
+        // 既存の履歴データ（価格情報などを含む）をハッシュマップ化
+        // これにより、SwapViewで保存した `priceInUsd` などを検索できるようにする
+        const existingMap = new Map(cachedHistory.map((t: TxHistory) => [t.hash, t]));
+
+        const mergedHistory: TxHistory[] = fetchedHistory.map((h: AlchemyHistory) => {
+          // 同じハッシュ（取引ID）を持つ既存データがあれば取得
+          const existing = existingMap.get(h.hash);
+          
+          // レートや価格情報は、既存データにあればそれを優先して維持する
+          // なければ計算やundefinedとする
+          let calculatedRate = existing?.exchangeRate;
+          let priceInUsd = existing?.priceInUsd;
+          let priceInJpy = existing?.priceInJpy;
+
+          // 新規取得データでレート計算が可能な場合（まだ計算されていない場合など）
+          if (!calculatedRate && h.type === 'swap' && h.amount && h.receivedAmount) {
              const sent = parseFloat(h.amount);
              const recv = parseFloat(h.receivedAmount);
              if (sent > 0) calculatedRate = recv / sent;
           }
+
           return {
-            id: h.id, hash: h.hash, type: h.type, amount: h.amount, symbol: h.symbol, 
-            from: h.from, to: h.to, date: h.date, network: allNetworks[networkKey]?.name || networkKey,
-            receivedAmount: h.receivedAmount, exchangeRate: calculatedRate
+            id: h.id, 
+            hash: h.hash, 
+            type: h.type, 
+            amount: h.amount, // ★修正済みの全桁文字列
+            symbol: h.symbol, 
+            from: h.from, 
+            to: h.to, 
+            date: h.date, 
+            network: allNetworks[networkKey]?.name || networkKey,
+            receivedAmount: h.receivedAmount, // ★修正済みの全桁文字列
+            exchangeRate: calculatedRate, 
+            priceInUsd: priceInUsd, // ★重要: アプリ内で保存した価格情報を引き継ぐ
+            priceInJpy: priceInJpy  // ★重要: 同上
           };
         });
-        setTxHistory(formattedHistory);
+
+        setTxHistory(mergedHistory);
         const now = Date.now();
         setHistoryLastUpdated(new Date(now).toLocaleString());
-        const newCache = { ...(local.historyCache || {}), [cacheKey]: { lastUpdated: now, data: formattedHistory } };
+        
+        // 更新したデータを保存
+        const newCache = { ...(local.historyCache || {}), [cacheKey]: { lastUpdated: now, data: mergedHistory } };
         await chrome.storage.local.set({ historyCache: newCache });
       } catch (e) { console.error("History sync failed", e); }
     };
     if (wallet) loadHistory();
-  }, [wallet?.address, networkKey, view]);
+  }, [wallet?.address, networkKey, view]); // 依存配列は維持
 
-  // --- Functions ---
+  // ... (以下、checkLoginStatusなどの関数は既存と同じ) ...
   const checkLoginStatus = async () => {
     const session = await chrome.storage.session.get(['masterPass']) as StorageSession;
     const local = await chrome.storage.local.get(['vault', 'accounts', 'network', 'bgImage', 'customNetworks', 'mainNetwork']) as StorageLocal & { mainNetwork?: string };
@@ -119,8 +145,6 @@ function App() {
     const net = (local.network && merged[local.network]) ? local.network : 'sepolia';
     setNetworkKey(net);
     if (local.bgImage) setBgImage(local.bgImage);
-    
-    // メインネットワーク設定の読み込み
     const mainNet = local.mainNetwork || 'mainnet';
     setMainNetwork(mainNet);
 
@@ -128,7 +152,6 @@ function App() {
     else if (session.masterPass) { 
       setSessionMasterPass(session.masterPass); 
       setView('list'); 
-      // 価格取得: 現在のネットワークとメインネットワーク両方
       fetchPrices(merged[net], merged[mainNet]); 
     } 
     else setView('login');
@@ -139,7 +162,6 @@ function App() {
     const net = allNetworks[key];
     chrome.runtime.sendMessage({ type: "NETWORK_CHANGED", payload: { rpcUrl: net.rpc, chainId: net.chainId } });
     chrome.storage.local.set({ network: key });
-    // 価格再取得
     fetchPrices(net, allNetworks[mainNetwork]);
     if (wallet) updateBalance(wallet, net.rpc);
   };
@@ -147,13 +169,10 @@ function App() {
   const handleSetMainNetwork = async (key: string) => {
     setMainNetwork(key);
     await chrome.storage.local.set({ mainNetwork: key });
-    // メイン通貨が変わったら価格再取得
     fetchPrices(allNetworks[networkKey], allNetworks[key]);
   };
   
-  // ★修正: 接続中ネットワークとメインネットワークの両方の価格を取得
   const fetchPrices = async (currentNet: NetworkConfig, mainNet?: NetworkConfig) => {
-    // 1. 現在のネットワークの価格
     const currentId = currentNet.coingeckoId;
     if (currentId) {
       const tryFetch = async (id: string) => { const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd,jpy&include_24hr_change=true`); if (!res.ok) throw new Error("API Error"); return await res.json(); };
@@ -167,13 +186,12 @@ function App() {
       setCurrentPrice(null);
     }
 
-    // 2. メインネットワーク（基礎通貨）の価格
     const mainId = mainNet?.coingeckoId;
     if (mainId) {
        try {
          const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${mainId}&vs_currencies=usd,jpy`);
          const data = await res.json();
-         const p = data[mainId] || data["matic-network"]; // Polygonフォールバック
+         const p = data[mainId] || data["matic-network"]; 
          if (p) setMainCurrencyPrice({ usd: p.usd, jpy: p.jpy });
        } catch(e) { setMainCurrencyPrice(null); }
     } else {
@@ -193,7 +211,6 @@ function App() {
     } catch (e) { setBalance('0'); }
   };
 
-  // Handlers (既存のまま)
   const handleStartSetup = (pass: string, secret: any, qr: string) => { setMasterPass(pass); setTempSecret(secret); setQrDataUrl(qr); setView('2fa_setup'); };
   const handleFinishSetup = async (code: string) => { if (!verifyTotp(code, tempSecret.base32 || tempSecret)) return alert("コードが違います"); const v: VaultData = { totpSecret: tempSecret.base32 || tempSecret, isSetupComplete: true }; await chrome.storage.local.set({ vault: encryptData(v, masterPass) }); await chrome.storage.session.set({ masterPass }); setSessionMasterPass(masterPass); setView('list'); };
   const handleLogin = async (pass: string, code: string) => { setLoading(true); try { const local = await chrome.storage.local.get(['vault']) as StorageLocal; const v = decryptData(local.vault!, pass) as VaultData; if (!v || !verifyTotp(code, v.totpSecret)) throw new Error(); await chrome.storage.session.set({ masterPass: pass }); setSessionMasterPass(pass); setView('list'); fetchPrices(allNetworks[networkKey], allNetworks[local.mainNetwork || 'mainnet']); } catch { alert("認証に失敗しました"); } finally { setLoading(false); } };
@@ -255,7 +272,6 @@ function App() {
     if (view === 'settings_network_add') return <SettingsNetworkAddView onAdd={handleAddNetwork} setView={setView} />;
   }
 
-  // 以下省略（既存と同じ）
   if (view === 'list') return <AccountListView accounts={savedAccounts} onUnlock={handleUnlockAccount} onDelete={handleDeleteAccount} onAdd={() => setView('import')} />;
   if (view === 'import') return <ImportView onImport={handleImport} onCancel={() => setView('list')} />;
   if (view === 'settings_menu') return <SettingsMenuView setView={setView} />;

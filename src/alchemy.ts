@@ -24,14 +24,18 @@ const COINGECKO_PLATFORMS: Record<string, string> = {
   astar: "astar",
 };
 
-// 有名なトークンのDecimalsをハードコードして補完するマップ
 const KNOWN_DECIMALS: Record<string, number> = {
-  // Sepolia USDC
   "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238": 6,
-  // Mainnet USDC
   "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": 6,
-  // Mainnet USDT
   "0xdac17f958d2ee523a2206206994597c13d831ec7": 6,
+};
+
+// ★追加: 小さな数値も全桁文字列化するヘルパー
+const formatFullNumber = (num: number | null | undefined): string => {
+  if (num === null || num === undefined) return "0";
+  if (num === 0) return "0";
+  // 小数点以下20桁まで出して末尾の不要な0を消す
+  return num.toFixed(20).replace(/\.?0+$/, "");
 };
 
 export const fetchTokens = async (address: string, networkKey: string): Promise<TokenData[]> => {
@@ -71,7 +75,6 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
           logo = metadata.logo || logo;
 
         } catch (e) { 
-          console.warn("Metadata fetch error for:", token.contractAddress); 
           if (KNOWN_DECIMALS[contractAddrLower]) {
             decimals = KNOWN_DECIMALS[contractAddrLower];
           }
@@ -79,12 +82,13 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
 
         const balanceFormatted = ethers.formatUnits(token.tokenBalance, decimals);
         
-        if (parseFloat(balanceFormatted) < 0.0001) return;
+        // 残高が極小でも表示する場合はここを調整。一旦0.00000001以上とする
+        if (parseFloat(balanceFormatted) < 0.00000001) return;
 
         tokens.push({
           name: name,
           symbol: symbol,
-          balance: parseFloat(balanceFormatted).toFixed(4),
+          balance: formatFullNumber(parseFloat(balanceFormatted)), // ★修正: 全桁表示
           logo: logo,
           address: token.contractAddress
         });
@@ -92,7 +96,6 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
       })
     );
 
-    // CoinGeckoで価格取得
     const platform = COINGECKO_PLATFORMS[networkKey];
     if (platform && contractAddresses.length > 0) {
       try {
@@ -111,9 +114,7 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
             };
           }
         });
-      } catch (e) { 
-        console.warn("Price fetch failed:", e); 
-      }
+      } catch (e) { console.warn("Price fetch failed:", e); }
     }
     return tokens;
   } catch (error) {
@@ -123,6 +124,7 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
 };
 
 export const fetchNfts = async (address: string, networkKey: string): Promise<NftData[]> => {
+    // (省略: 変更なし)
     const network = NETWORK_MAP[networkKey];
     if (!network) return [];
     const config = { apiKey: API_KEY, network };
@@ -134,7 +136,7 @@ export const fetchNfts = async (address: string, networkKey: string): Promise<Nf
         const name = nft.name || `#${nft.tokenId}`;
         return { name: name, tokenId: nft.tokenId, image: img, collectionName: nft.contract.name || "Unknown" };
       });
-    } catch (error) { console.error(error); return []; }
+    } catch (error) { return []; }
 };
 
 export const fetchTransactionHistory = async (address: string, networkKey: string): Promise<AlchemyHistory[]> => {
@@ -180,9 +182,10 @@ export const fetchTransactionHistory = async (address: string, networkKey: strin
           const receivedAsset = received[0];
           const sentSymbol = sentAsset ? sentAsset.asset : "???";
           const recvSymbol = receivedAsset ? receivedAsset.asset : (isSwapToRouter ? "Token" : "???");
-          const sentAmount = sentAsset ? sentAsset.value?.toFixed(4) : "0";
-          // ★修正: 受け取り額を取得
-          const recvAmount = receivedAsset ? receivedAsset.value?.toFixed(4) : "0";
+          
+          // ★修正: toFixed(4) を廃止し、formatFullNumberを使用
+          const sentAmount = sentAsset ? formatFullNumber(sentAsset.value) : "0";
+          const recvAmount = receivedAsset ? formatFullNumber(receivedAsset.value) : "0";
 
           history.push({ 
             id: hash, 
@@ -194,14 +197,26 @@ export const fetchTransactionHistory = async (address: string, networkKey: strin
             to: myAddr, 
             date: date, 
             network: networkKey,
-            receivedAmount: recvAmount // ★追加: ここでセット
+            receivedAmount: recvAmount
           });
         } else {
           if (sent.length > 0) {
-            sent.forEach(tx => { history.push({ id: tx.uniqueId, hash: tx.hash, type: 'send', amount: tx.value?.toFixed(4) || "0", symbol: tx.asset || "ETH", from: tx.from, to: tx.to, date: date, network: networkKey }); });
+            sent.forEach(tx => { 
+                history.push({ 
+                    id: tx.uniqueId, hash: tx.hash, type: 'send', 
+                    amount: formatFullNumber(tx.value), // ★修正
+                    symbol: tx.asset || "ETH", from: tx.from, to: tx.to, date: date, network: networkKey 
+                }); 
+            });
           }
           if (received.length > 0) {
-            received.forEach(tx => { history.push({ id: tx.uniqueId, hash: tx.hash, type: 'receive', amount: tx.value?.toFixed(4) || "0", symbol: tx.asset || "ETH", from: tx.from, to: tx.to, date: date, network: networkKey }); });
+            received.forEach(tx => { 
+                history.push({ 
+                    id: tx.uniqueId, hash: tx.hash, type: 'receive', 
+                    amount: formatFullNumber(tx.value), // ★修正
+                    symbol: tx.asset || "ETH", from: tx.from, to: tx.to, date: date, network: networkKey 
+                }); 
+            });
           }
         }
       });
@@ -214,33 +229,25 @@ export const fetchTransactionHistory = async (address: string, networkKey: strin
 };
 
 export const fetchTokenMetadataAndPrice = async (address: string, networkKey: string) => {
+  // (省略: 変更なし)
   const network = NETWORK_MAP[networkKey];
   if (!network || !ethers.isAddress(address)) return null;
-
   const config = { apiKey: API_KEY, network };
   const alchemy = new Alchemy(config);
-
   try {
     const metadata = await alchemy.core.getTokenMetadata(address);
     if (!metadata.symbol) return null;
-
     let price = { usd: 0, jpy: 0 };
     const platform = COINGECKO_PLATFORMS[networkKey];
-    
     if (platform) {
       try {
         const url = `https://api.coingecko.com/api/v3/simple/token_price/${platform}?contract_addresses=${address}&vs_currencies=usd,jpy`;
         const res = await fetch(url);
         const data = await res.json();
         const p = data[address.toLowerCase()];
-        if (p) {
-          price = { usd: p.usd || 0, jpy: p.jpy || 0 };
-        }
-      } catch (e) {
-        console.warn("Price fetch failed for custom token:", e);
-      }
+        if (p) { price = { usd: p.usd || 0, jpy: p.jpy || 0 }; }
+      } catch (e) {}
     }
-
     return {
       name: metadata.name || "Unknown",
       symbol: metadata.symbol || "???",
@@ -249,8 +256,5 @@ export const fetchTokenMetadataAndPrice = async (address: string, networkKey: st
       address: address,
       price: price
     };
-  } catch (error) {
-    console.error("Token Info Fetch Error:", error);
-    return null;
-  }
+  } catch (error) { return null; }
 };

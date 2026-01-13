@@ -5,27 +5,20 @@ const STABLE_COINS = ['USDC', 'USDT', 'DAI'];
 
 // --- Helper Functions ---
 
-// 数値を表示用にフォーマット (10桁程度で切り捨て)
-// 単価表示用: 見やすさ重視で長すぎる場合は省略
 const formatDisplayPrice = (num: number) => {
   if (num === 0) return "0";
-  // 小数点以下20桁まで出して、末尾の0を消す
   const str = num.toFixed(20).replace(/\.?0+$/, "");
-  if (str.length > 12) { // 若干長めに許容
+  if (str.length > 12) {
     return str.substring(0, 12) + "..";
   }
   return str;
 };
 
-// 全桁表示用 (計算やツールチップ、総額表示用)
-// 指数表記(1e-5等)を避けて、"0.00001"のようにフルで文字列化する
 const formatFullNumber = (num: number) => {
   if (num === 0) return "0";
-  // 最大20桁まで確保し、末尾の不要な0を削除
   return num.toFixed(20).replace(/\.?0+$/, "");
 };
 
-// パーセント表示
 const formatPercent = (val: number) => {
   const sign = val > 0 ? "+" : "";
   return `${sign}${val.toFixed(2)}%`;
@@ -46,6 +39,7 @@ export type ProfitCalculationResult = {
   totalPrevUsdDisplay: string;
   totalCurrUsdDisplay: string;
   isPrediction?: boolean;
+  reason?: string;
 };
 
 type ProfitParams = {
@@ -84,19 +78,11 @@ export const calculateSwapProfit = async ({
   const fromSym = fromType === 'native' ? net.symbol : selectedFromToken!.symbol;
   const toSym = searchedToken.symbol;
   
-  // 入力数量 (number型で保持して計算精度を維持)
   const inputAmt = parseFloat(amount);
 
-  // 現在の単価 (USD) - number型
-  let fromPriceUsd = fetchedFromPrice || 0;
-  if (fromPriceUsd === 0) {
-    fromPriceUsd = fromType === 'native'
-      ? (currentPrice?.usd || 0)
-      : (selectedFromToken?.market?.usd.price || 0);
-  }
-  const toPriceUsd = searchedToken.price?.usd || 0;
-
-  // CoinGecko IDの特定
+  // --- CoinGecko ID & Native Check ---
+  
+  // From Token ID
   let fromCoingeckoId: string | null = null;
   if (fromType === 'native') {
     fromCoingeckoId = net.coingeckoId;
@@ -105,8 +91,17 @@ export const calculateSwapProfit = async ({
     if (found && found.coingeckoId) fromCoingeckoId = found.coingeckoId;
   }
 
+  // To Token ID & Native Check
   let toCoingeckoId: string | null = null;
-  if (searchedToken.symbol === net.symbol || searchedToken.symbol === `W${net.symbol}`) {
+  
+  // Native判定: Symbol一致 or アドレス一致 or 特定のWrappedトークン
+  const isToNative = searchedToken.symbol === net.symbol || 
+                     (net.symbol === 'ETH' && searchedToken.symbol === 'WETH') ||
+                     (net.symbol === 'MATIC' && searchedToken.symbol === 'WMATIC') ||
+                     (net.symbol === 'POL' && searchedToken.symbol === 'WPOL') ||
+                     (net.symbol === 'POL' && searchedToken.symbol === 'MATIC'); // Polygon migration対応
+
+  if (isToNative) {
     toCoingeckoId = net.coingeckoId;
   } else {
     const addrToCheck = searchedToken.address || toInput;
@@ -114,7 +109,25 @@ export const calculateSwapProfit = async ({
     if (found && found.coingeckoId) toCoingeckoId = found.coingeckoId;
   }
 
-  // 履歴検索ロジック (逆方向: Profit/Lossチェック用)
+  // --- 現在価格の決定 ---
+
+  // From単価 (USD)
+  let fromPriceUsd = fetchedFromPrice || 0;
+  if (fromPriceUsd === 0) {
+    fromPriceUsd = fromType === 'native'
+      ? (currentPrice?.usd || 0)
+      : (selectedFromToken?.market?.usd.price || 0);
+  }
+
+  // To単価 (USD)
+  let toPriceUsd = searchedToken.price?.usd || 0;
+  
+  // ★修正: ToがNativeの場合、API取得価格が0なら currentPrice (Native価格) を使う
+  if (isToNative && toPriceUsd === 0 && currentPrice?.usd) {
+      toPriceUsd = currentPrice.usd;
+  }
+
+  // --- 履歴検索ロジック (逆方向) ---
   const normalize = (s: string) => s.toUpperCase().trim();
   const prevTxReverse = txHistory.find((tx: TxHistory) => {
     if (tx.type !== 'swap') return false;
@@ -124,11 +137,11 @@ export const calculateSwapProfit = async ({
     const currentTo = normalize(toSym);
     const currentFrom = normalize(fromSym);
 
-    // 逆方向チェック: 履歴のFromが今回のTo、履歴のToが今回のFrom
+    // 逆方向チェック
     return hFrom === currentTo && hTo === currentFrom;
   });
 
-  // 初期値設定
+  // 初期値
   let unitProfitPercent = "---";
   let unitProfitColor = "text-slate-400";
   let displayHistUnitPrice = "---";
@@ -137,19 +150,22 @@ export const calculateSwapProfit = async ({
   let totalProfitColor = "text-slate-400";
   let totalDiffUsd = "0";
   let totalDiffJpy = "0";
-  let totalPrevUsdDisplay = "0"; // 総額(過去)の表示用文字列
+  let totalPrevUsdDisplay = "0";
 
   let isPrediction = false;
+  let reason = "";
 
-  if (prevTxReverse) {
-    let histUnitPriceUsd = 0; // 過去の単価 (number型)
+  if (!prevTxReverse) {
+      reason = "過去にこのペアの逆方向の取引履歴が見つかりませんでした。";
+  } else {
+    let histUnitPriceUsd = 0; // 過去の単価
 
     const isFromStable = STABLE_COINS.some(s => fromSym.toUpperCase().includes(s));
     const isToStable = STABLE_COINS.some(s => toSym.toUpperCase().includes(s));
 
-    // ---------------------------------------------------------
+    // =========================================================
     // 1. 過去の単価(USD)を決定するロジック
-    // ---------------------------------------------------------
+    // =========================================================
 
     if (isFromStable && isToStable) {
       // パターンA: ステーブル同士
@@ -158,90 +174,110 @@ export const calculateSwapProfit = async ({
     }
     else if (!isFromStable && fromCoingeckoId) {
       // パターンB: 売り (Crypto -> Stable/Other)
-      // A. レートから逆算 (最も正確な取得単価)
+      // 以前買った(Stable->Crypto)
       if (isToStable && prevTxReverse.exchangeRate) {
         histUnitPriceUsd = 1 / prevTxReverse.exchangeRate;
       }
-      // B. APIから取得
       else {
         isPrediction = true;
         const p = await fetchHistoricalPrice(fromCoingeckoId, prevTxReverse.date);
-        if (p && p > 0) histUnitPriceUsd = p;
-      }
-    }
-    else if (!isToStable && toCoingeckoId) {
-      // パターンC: 買い戻し (Stable/Other -> Crypto)
-      isPrediction = true;
-      const p = await fetchHistoricalPrice(toCoingeckoId, prevTxReverse.date);
-      if (p && p > 0) {
-        // 特殊計算: (売値 - 買値) / 買値
-        if (toPriceUsd > 0) {
-          const diff = (p - toPriceUsd) / toPriceUsd * 100;
-          unitProfitPercent = formatPercent(diff);
-          unitProfitColor = diff >= 0 ? "text-green-400" : "text-red-400";
-          displayHistUnitPrice = `$${formatDisplayPrice(p)} (Sold)`;
-          histUnitPriceUsd = -1; // 特殊フラグ(下の共通計算をスキップ)
+        if (p && p > 0) {
+            histUnitPriceUsd = p;
+        } else {
+            reason = "過去の価格データをAPIから取得できませんでした。";
         }
       }
     }
-    else if (prevTxReverse.exchangeRate && isToStable) {
-      // バックアップ
+    else if (!isToStable) {
+      // パターンC: 買い戻し (Stable/Other -> Crypto) 
+      // 例: USDC -> MATIC
+      
+      // 優先1: 履歴データの priceInUsd (過去に売った時のFrom単価)
+      if (prevTxReverse.priceInUsd && prevTxReverse.priceInUsd > 0) {
+          const p = prevTxReverse.priceInUsd;
+          if (toPriceUsd > 0) {
+             const diff = (p - toPriceUsd) / toPriceUsd * 100;
+             unitProfitPercent = formatPercent(diff);
+             unitProfitColor = diff >= 0 ? "text-green-400" : "text-red-400";
+             displayHistUnitPrice = `$${formatDisplayPrice(p)} (Sold)`;
+             histUnitPriceUsd = -1; // 特殊フラグ
+          } else {
+             reason = "現在の購入対象(To)の価格が取得できていません。";
+          }
+      }
+      // 優先2: IDがあるならAPI
+      else if (toCoingeckoId) {
+          isPrediction = true;
+          const p = await fetchHistoricalPrice(toCoingeckoId, prevTxReverse.date);
+          if (p && p > 0) {
+              if (toPriceUsd > 0) {
+                 const diff = (p - toPriceUsd) / toPriceUsd * 100;
+                 unitProfitPercent = formatPercent(diff);
+                 unitProfitColor = diff >= 0 ? "text-green-400" : "text-red-400";
+                 displayHistUnitPrice = `$${formatDisplayPrice(p)} (Sold)`;
+                 histUnitPriceUsd = -1; 
+              } else {
+                 reason = "現在の購入対象(To)の価格が取得できていません。";
+              }
+          } else {
+              reason = "過去のToトークン価格をAPIから取得できませんでした。";
+          }
+      } else {
+          reason = "履歴に価格がなく、ToトークンのIDも不明なため計算できません。";
+      }
+    }
+    
+    if (histUnitPriceUsd === 0 && prevTxReverse.exchangeRate && isToStable) {
       histUnitPriceUsd = 1 / prevTxReverse.exchangeRate;
     }
 
-    // ---------------------------------------------------------
+    if (histUnitPriceUsd === 0 && unitProfitPercent === "---" && !reason) {
+        reason = "履歴データから有効なレートまたは価格を特定できませんでした。";
+    }
+
+    // =========================================================
     // 2. 単価比較 (通常フロー: 売りの場合)
-    // ---------------------------------------------------------
+    // =========================================================
     if (histUnitPriceUsd > 0 && fromPriceUsd > 0) {
       const diff = (fromPriceUsd - histUnitPriceUsd) / histUnitPriceUsd * 100;
       unitProfitPercent = formatPercent(diff);
       unitProfitColor = diff >= 0 ? "text-green-400" : "text-red-400";
       displayHistUnitPrice = `$${formatDisplayPrice(histUnitPriceUsd)}`;
+    } else if (histUnitPriceUsd > 0 && fromPriceUsd === 0) {
+        reason = "現在の交換元(From)トークンの価格が取得できません。";
     }
 
-    // ---------------------------------------------------------
+    // =========================================================
     // 3. 総額比較 (Lower Section)
-    // ---------------------------------------------------------
-    // ここで内部計算には number 型の変数をそのまま使用し、全桁計算を行う
-    
+    // =========================================================
     let basePriceForTotal = histUnitPriceUsd;
     if (basePriceForTotal === -1) {
-      // 買い戻し(Pattern C)の総額比較: From(USDC等)の価値は変わらない($1)
       basePriceForTotal = 1.0; 
     }
 
     if (basePriceForTotal > 0 && fromPriceUsd > 0) {
-      // 過去の総額 (単価 * 枚数)
       const totalPrevUsd = inputAmt * basePriceForTotal;
-      
-      // 現在の総額 (単価 * 枚数)
       const totalCurrUsd = inputAmt * fromPriceUsd;
 
-      // 差額 (USD)
       const totalDiffVal = totalCurrUsd - totalPrevUsd;
-      
-      // 損益率 (%)
       let totalDiffPerc = 0;
       if (totalPrevUsd > 0) totalDiffPerc = (totalDiffVal / totalPrevUsd) * 100;
 
       totalProfitPercent = formatPercent(totalDiffPerc);
       totalProfitColor = totalDiffVal >= 0 ? "text-green-400" : "text-red-400";
 
-      // 差額表示 (全桁)
       totalDiffUsd = (totalDiffVal >= 0 ? "+" : "") + formatFullNumber(totalDiffVal);
 
-      // JPY換算 (差額 * レート)
+      // JPY換算
       const usdJpyRate = (currentPrice?.usd && currentPrice?.jpy) ? (currentPrice.jpy / currentPrice.usd) : 150;
       const totalDiffValJpy = totalDiffVal * usdJpyRate;
       totalDiffJpy = (totalDiffValJpy >= 0 ? "+" : "") + formatFullNumber(totalDiffValJpy);
 
-      // 表示用文字列に変換 (formatFullNumber を使用して全桁表示)
-      // 例: 0.00001ドル * 10000枚 = 0.1ドル と正しく表示される
       totalPrevUsdDisplay = formatFullNumber(totalPrevUsd);
     }
   }
 
-  // 基礎通貨換算 (例: ETH換算)
+  // 基礎通貨換算
   const currentValueUsd = inputAmt * fromPriceUsd;
   let diffValueMainStr = "---";
   if (mainCurrencyPrice?.usd && mainCurrencyPrice.usd > 0) {
@@ -249,7 +285,6 @@ export const calculateSwapProfit = async ({
     diffValueMainStr = `${formatFullNumber(valInMain)} ${mainNet.symbol}`;
   }
 
-  // 現在の総額(USD)の表示用
   const currentTotalUsdDisplay = formatFullNumber(currentValueUsd);
 
   return {
@@ -257,13 +292,14 @@ export const calculateSwapProfit = async ({
     unitProfitPercent,
     unitProfitColor,
     displayHistUnitPrice,
-    displayCurrUnitPrice: `$${formatDisplayPrice(fromPriceUsd)}`, // 単価は長いので省略表示
+    displayCurrUnitPrice: `$${formatDisplayPrice(fromPriceUsd)}`, 
     totalProfitPercent,
     totalProfitColor,
     totalDiffUsd,
     totalDiffJpy,
-    totalPrevUsdDisplay, // 過去の総額 (全桁)
-    totalCurrUsdDisplay: currentTotalUsdDisplay, // 現在の総額 (全桁)
-    isPrediction
+    totalPrevUsdDisplay, 
+    totalCurrUsdDisplay: currentTotalUsdDisplay, 
+    isPrediction,
+    reason 
   };
 };

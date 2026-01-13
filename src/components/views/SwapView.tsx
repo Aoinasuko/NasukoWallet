@@ -1,3 +1,5 @@
+// src/components/views/SwapView.tsx
+
 import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { Wrapper } from '../Layout';
@@ -5,15 +7,15 @@ import { GlassCard, Button, Input } from '../UI';
 import { executeSwap } from '../../services/swapService';
 import { fetchTokenMetadataAndPrice } from '../../alchemy';
 import { MAJOR_TOKENS_LIST } from '../../constants';
-// ★修正: 新しいサービスをインポート
+// ★重要: 型定義のインポート元を確認 (ProfitCalculationResultを使うため)
 import { calculateSwapProfit, type ProfitCalculationResult } from '../../services/profitService';
 import type { TxHistory, TokenData } from '../../types';
 
 export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenList, setView, onSwap, txHistory, currentPrice, mainCurrencyPrice }: any) => {
+  // ... (State定義などは既存のまま)
   const [step, setStep] = useState<'input' | 'confirm'>('input');
   const [loading, setLoading] = useState(false);
 
-  // --- State ---
   const [fromType, setFromType] = useState<'native' | 'token'>('native');
   const [selectedFromToken, setSelectedFromToken] = useState<TokenData | null>(null);
 
@@ -21,10 +23,7 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
   const [searchedToken, setSearchedToken] = useState<any>(null); 
   const [isSearching, setIsSearching] = useState(false);
 
-  // Fromトークンの価格を個別に管理
   const [fetchedFromPrice, setFetchedFromPrice] = useState<number | null>(null);
-
-  // ★修正: 型定義をサービスからインポートしたものに変更
   const [comparisonData, setComparisonData] = useState<ProfitCalculationResult | null>(null);
 
   const [amount, setAmount] = useState<string>('0');
@@ -35,6 +34,7 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
   const mainNet = allNetworks[mainNetwork] || net;
   const majorTokens = MAJOR_TOKENS_LIST[networkKey] || [];
 
+  // ... (useEffect: updateBalance, searchToken などは変更なし) ...
   // Balance Update
   useEffect(() => {
     const updateBalance = async () => {
@@ -60,7 +60,6 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
     updateBalance();
   }, [fromType, selectedFromToken, networkKey, wallet.address, net.rpc, currentPrice]);
 
-  // Token Search (To)
   useEffect(() => {
     const searchToken = async () => {
       if (!ethers.isAddress(toInput)) {
@@ -76,7 +75,7 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
     return () => clearTimeout(timer);
   }, [toInput, networkKey]);
 
-  // Handlers
+  // ... (Handlers: handleSelectFrom, handleSelectTo, handlePercentInput, handleProceed, handleExecute も変更なし) ...
   const handleSelectFrom = (e: any) => {
     const val = e.target.value;
     if (val === 'NATIVE') {
@@ -122,7 +121,6 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
       const fee = (feeData.gasPrice || BigInt(0)) * BigInt(200000);
       setEstimatedFee(ethers.formatEther(fee));
 
-      // ★修正: サービスを利用して計算
       const result = await calculateSwapProfit({
         amount,
         fromType,
@@ -256,11 +254,17 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
               <div>
                  <div className="flex justify-between items-center mb-1">
                     <span className="text-xs text-slate-400">Unit Price {comparisonData.isPrediction && "(Est)"}</span>
-                    <span className={`font-bold ${comparisonData.unitProfitColor}`}>{comparisonData.unitProfitPercent}</span>
+                    {/* ★修正: title属性にreasonを設定してホバー表示 */}
+                    <span 
+                        className={`font-bold ${comparisonData.unitProfitColor} cursor-help`}
+                        title={comparisonData.reason || "直近の逆方向取引と比較しています"}
+                    >
+                        {comparisonData.unitProfitPercent}
+                    </span>
                  </div>
                  <div className="flex justify-between text-[10px] font-mono text-slate-500">
-                    <span className="truncate max-w-[45%]">Past: {comparisonData.displayHistUnitPrice}</span>
-                    <span className="truncate max-w-[45%]">Now: {comparisonData.displayCurrUnitPrice}</span>
+                    <span className="break-all w-[48%]">Past: {comparisonData.displayHistUnitPrice}</span>
+                    <span className="break-all w-[48%] text-right">Now: {comparisonData.displayCurrUnitPrice}</span>
                  </div>
               </div>
               <div className="h-px bg-slate-800"></div>
@@ -269,20 +273,20 @@ export const SwapView = ({ networkKey, allNetworks, mainNetwork, wallet, tokenLi
                       <span className="text-xs text-slate-400">Total Value Diff</span>
                       <span className={`font-bold ${comparisonData.totalProfitColor}`}>{comparisonData.totalProfitPercent}</span>
                   </div>
-                  <div className="bg-slate-950/50 p-2 rounded text-[10px] font-mono space-y-1 overflow-hidden">
+                  <div className="bg-slate-950/50 p-2 rounded text-[10px] font-mono space-y-1">
                       <div className="flex justify-between">
                           <span className="text-slate-500 min-w-[30px]">Past:</span>
-                          <span className="text-slate-300 truncate text-right">${comparisonData.totalPrevUsdDisplay}</span>
+                          <span className="text-slate-300 break-all text-right">${comparisonData.totalPrevUsdDisplay}</span>
                       </div>
                       <div className="flex justify-between">
                           <span className="text-slate-500 min-w-[30px]">Now:</span>
-                          <span className="text-cyan-200 truncate text-right">${comparisonData.totalCurrUsdDisplay}</span>
+                          <span className="text-cyan-200 break-all text-right">${comparisonData.totalCurrUsdDisplay}</span>
                       </div>
                       <div className="flex justify-between border-t border-slate-800 pt-1 mt-1">
                           <span className="text-slate-500">Diff:</span>
-                          <div className="text-right">
-                              <div className={`${comparisonData.totalProfitColor} truncate`}>${comparisonData.totalDiffUsd}</div>
-                              <div className={`${comparisonData.totalProfitColor} truncate`}>¥{comparisonData.totalDiffJpy}</div>
+                          <div className="text-right w-full">
+                              <div className={`${comparisonData.totalProfitColor} break-all`}>${comparisonData.totalDiffUsd}</div>
+                              <div className={`${comparisonData.totalProfitColor} break-all`}>¥{comparisonData.totalDiffJpy}</div>
                           </div>
                       </div>
                   </div>
