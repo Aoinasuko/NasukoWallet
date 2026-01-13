@@ -1,51 +1,52 @@
 // src/constants.ts
 
 import type { NetworkConfig } from './types';
+import { getRpcUrl } from './apiConfig';
 
 // ... (DEFAULT_NETWORKS は変更なし)
 export const DEFAULT_NETWORKS: Record<string, NetworkConfig> = {
   mainnet: { 
-    name: "Ethereum", rpc: "https://1rpc.io/eth", chainId: "1", symbol: "ETH", coingeckoId: "ethereum", 
+    name: "Ethereum", rpc: getRpcUrl("mainnet", "https://cloudflare-eth.com"), chainId: "1", symbol: "ETH", coingeckoId: "ethereum", 
     explorer: "https://etherscan.io/tx/", color: "#627EEA",
     logo: "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/eth.png"
   },
   polygon: { 
-    name: "Polygon", rpc: "https://1rpc.io/matic", chainId: "137", symbol: "POL", coingeckoId: "polygon-ecosystem-token", 
+    name: "Polygon", rpc: getRpcUrl("polygon", "https://polygon-rpc.com"), chainId: "137", symbol: "POL", coingeckoId: "polygon-ecosystem-token", 
     explorer: "https://polygonscan.com/tx/", color: "#8247E5",
     logo: "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/matic.png"
   },
   bsc: { 
-    name: "BNB Chain", rpc: "https://1rpc.io/bnb", chainId: "56", symbol: "BNB", coingeckoId: "binancecoin", 
+    name: "BNB Chain", rpc: getRpcUrl("bsc", "https://bsc-dataseed.binance.org"), chainId: "56", symbol: "BNB", coingeckoId: "binancecoin", 
     explorer: "https://bscscan.com/tx/", color: "#F3BA2F",
     logo: "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/bnb.png"
   },
   avalanche: { 
-    name: "Avalanche", rpc: "https://1rpc.io/avax/c", chainId: "43114", symbol: "AVAX", coingeckoId: "avalanche-2", 
+    name: "Avalanche", rpc: getRpcUrl("avalanche", "https://api.avax.network/ext/bc/C/rpc"), chainId: "43114", symbol: "AVAX", coingeckoId: "avalanche-2", 
     explorer: "https://snowtrace.io/tx/", color: "#E84142",
     logo: "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/avax.png"
   },
   optimism: { 
-    name: "Optimism", rpc: "https://1rpc.io/op", chainId: "10", symbol: "ETH", coingeckoId: "ethereum", 
+    name: "Optimism", rpc: getRpcUrl("optimism", "https://mainnet.optimism.io"), chainId: "10", symbol: "ETH", coingeckoId: "ethereum", 
     explorer: "https://optimistic.etherscan.io/tx/", color: "#FF0420",
     logo: "https://assets.coingecko.com/coins/images/25244/standard/Optimism.png"
   },
   arbitrum: { 
-    name: "Arbitrum", rpc: "https://1rpc.io/arb", chainId: "42161", symbol: "ETH", coingeckoId: "ethereum", 
+    name: "Arbitrum", rpc: getRpcUrl("arbitrum", "https://arb1.arbitrum.io/rpc"), chainId: "42161", symbol: "ETH", coingeckoId: "ethereum", 
     explorer: "https://arbiscan.io/tx/", color: "#2D374B",
     logo: "https://assets.coingecko.com/coins/images/16547/standard/arbitrum.jpg"
   },
   base: { 
-    name: "Base", rpc: "https://1rpc.io/base", chainId: "8453", symbol: "ETH", coingeckoId: "ethereum", 
+    name: "Base", rpc: getRpcUrl("base", "https://mainnet.base.org"), chainId: "8453", symbol: "ETH", coingeckoId: "ethereum", 
     explorer: "https://basescan.org/tx/", color: "#0052FF",
     logo: "https://assets.coingecko.com/coins/images/31199/standard/base.png"
   },
   astar: { 
-    name: "Astar", rpc: "https://1rpc.io/astr", chainId: "592", symbol: "ASTR", coingeckoId: "astar", 
+    name: "Astar", rpc: getRpcUrl("astar", "https://rpc.astar.network:8545"), chainId: "592", symbol: "ASTR", coingeckoId: "astar", 
     explorer: "https://astar.subscan.io/extrinsic/", color: "#1b6dc1",
     logo: "https://assets.coingecko.com/coins/images/23567/standard/astar.png"
   },
   sepolia: { 
-    name: "Sepolia", rpc: "https://1rpc.io/sepolia", chainId: "11155111", symbol: "SepoliaETH", coingeckoId: "ethereum", 
+    name: "Sepolia", rpc: getRpcUrl("sepolia", "https://rpc.sepolia.org"), chainId: "11155111", symbol: "SepoliaETH", coingeckoId: "ethereum", 
     explorer: "https://sepolia.etherscan.io/tx/", color: "#00d0ff",
     logo: "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/icon/eth.png"
   },
@@ -74,7 +75,7 @@ export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; U
   },
   polygon: {
     ROUTER: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
-    WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WMATIC on Polygon is usually just wrapped native, but here WETH on Polygon
+    WETH: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" // WMATIC (wrapped native), // WMATIC on Polygon is usually just wrapped native, but here WETH on Polygon
     // Polygon Native is POL/MATIC. WETH is 0x7ce...
     USDC: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
     MATIC: "0x0000000000000000000000000000000000001010", // Native Token System Contract

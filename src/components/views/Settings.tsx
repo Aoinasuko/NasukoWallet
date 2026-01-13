@@ -10,9 +10,20 @@ export const SettingsMenuView = ({ setView }: any) => (
         { id: 'settings_network_list', icon: '🌐', title: 'ネットワーク設定', desc: 'RPCの追加・編集' },
         { id: 'settings_account', icon: '🔐', title: 'アカウント設定', desc: '秘密鍵の確認' },
         { id: 'settings_general', icon: '🎨', title: '一般設定', desc: '背景画像・データ管理' },
+        { id: 'runner_tab', icon: '🤖', title: '自動取引（Runner）', desc: '別タブで起動（スリープ対策）' },
       ].map((item) => (
         <GlassCard key={item.id} className="cursor-pointer hover:bg-cyan-900/10 hover:border-cyan-500/30 transition group">
-          <div onClick={() => setView(item.id)} className="flex items-center gap-4">
+          <div
+            onClick={() => {
+              if (item.id === 'runner_tab') {
+                const url = chrome.runtime.getURL('index.html?mode=runner');
+                window.open(url, '_blank');
+                return;
+              }
+              setView(item.id);
+            }}
+            className="flex items-center gap-4"
+          >
             <span className="text-2xl group-hover:scale-110 transition">{item.icon}</span>
             <div><h3 className="font-bold text-cyan-50">{item.title}</h3><p className="text-xs text-slate-400">{item.desc}</p></div>
           </div>

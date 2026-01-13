@@ -16,8 +16,18 @@ import { AccountListView, ImportView } from './components/views/Accounts';
 import { SettingsMenuView, SettingsAccountView, SettingsGeneralView, SettingsNetworkListView, SettingsNetworkAddView } from './components/views/Settings';
 import { ReceiveView } from './components/views/Actions';
 import { SwapView } from './components/views/SwapView';
+import { RunnerView } from './components/views/RunnerView';
 
 function App() {
+  // "Runner tab" mode: open index.html?mode=runner in a normal Chrome tab to avoid MV3 sleep.
+  const isRunnerMode = (() => {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get('mode') === 'runner';
+    } catch {
+      return false;
+    }
+  })();
   const [view, setView] = useState('loading'); 
   const [networkKey, setNetworkKey] = useState<string>('sepolia');
   const [allNetworks, setAllNetworks] = useState<Record<string, NetworkConfig>>(DEFAULT_NETWORKS);
@@ -151,6 +161,12 @@ function App() {
     const mainNet = local.mainNetwork || 'mainnet';
     setMainNetwork(mainNet);
 
+    // Runner mode is independent from the vault login (it uses a separate bot key).
+    if (isRunnerMode) {
+      setView('runner');
+      return;
+    }
+
     if (!local.vault) setView('setup');
     else if (session.masterPass) { 
       setSessionMasterPass(session.masterPass); 
@@ -253,6 +269,7 @@ function App() {
   if (view === 'setup') return <WelcomeView onStartSetup={handleStartSetup} />;
   if (view === '2fa_setup') return <Setup2FAView qrUrl={qrDataUrl} onFinishSetup={handleFinishSetup} />;
   if (view === 'login') return <LoginView onLogin={handleLogin} loading={loading} />;
+  if (view === 'runner') return <RunnerView allNetworks={allNetworks} />;
   
   if (wallet) {
     if (view === 'home') return <HomeView wallet={wallet} balance={balance} networkKey={networkKey} allNetworks={allNetworks} currentPrice={currentPrice} currency={currency} onSetCurrency={() => setCurrency(prev => prev==='JPY'?'USD':'JPY')} tokenList={tokenList} nftList={nftList} isAssetLoading={isAssetLoading} onChangeNetwork={changeNetwork} setView={setView} onLogout={() => { setWallet(null); setView('list'); }} bgImage={bgImage} />;
