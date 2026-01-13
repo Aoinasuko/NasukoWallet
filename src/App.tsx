@@ -133,7 +133,14 @@ function App() {
   // --- Functions ---
   const checkLoginStatus = async () => {
     const session = await chrome.storage.session.get(['masterPass']) as StorageSession;
-    const local = await chrome.storage.local.get(['vault', 'accounts', 'network', 'bgImage', 'customNetworks', 'mainNetwork']) as StorageLocal & { mainNetwork?: string };
+    const local = await chrome.storage.local.get([
+      'vault',
+      'accounts',
+      'network',
+      'bgImage',
+      'customNetworks',
+      'mainNetwork',
+    ]) as StorageLocal & { mainNetwork?: string };
     
     if (local.accounts) setSavedAccounts(local.accounts);
     let merged = { ...DEFAULT_NETWORKS, ...(local.customNetworks || {}) };
@@ -278,6 +285,7 @@ function App() {
             allNetworks={allNetworks}
             setView={setView} 
             onResetHistory={handleResetHistory} // ★追加: 履歴リセット機能渡し
+            
         />
     );
     if (view === 'settings_network_list') return <SettingsNetworkListView allNetworks={allNetworks} onDelete={handleDeleteNetwork} setView={setView} />;
@@ -287,7 +295,17 @@ function App() {
   if (view === 'list') return <AccountListView accounts={savedAccounts} onUnlock={handleUnlockAccount} onDelete={handleDeleteAccount} onAdd={() => setView('import')} />;
   if (view === 'import') return <ImportView onImport={handleImport} onCancel={() => setView('list')} />;
   // (settings_general は未ログインでもアクセス可能にしておく)
-  if (view === 'settings_general') return <SettingsGeneralView bgImage={bgImage} onSetBg={handleSetBg} mainNetwork={mainNetwork} onSetMainNetwork={handleSetMainNetwork} allNetworks={allNetworks} setView={setView} onResetHistory={handleResetHistory} />;
+  if (view === 'settings_general') return (
+    <SettingsGeneralView
+      bgImage={bgImage}
+      onSetBg={handleSetBg}
+      mainNetwork={mainNetwork}
+      onSetMainNetwork={handleSetMainNetwork}
+      allNetworks={allNetworks}
+      setView={setView}
+      onResetHistory={handleResetHistory}
+    />
+  );
 
   return <div className="text-slate-500 p-10 text-center text-xs">Error: Unknown View ({view})</div>;
 }

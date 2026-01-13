@@ -85,6 +85,8 @@ export const SettingsGeneralView = ({ bgImage, onSetBg, mainNetwork, onSetMainNe
         <p className="text-xs text-slate-400 mb-3">アプリ内の取引履歴キャッシュと価格データを削除します。</p>
         <Button variant="secondary" onClick={onResetHistory} className="border-red-900/50 text-red-300 hover:bg-red-900/20">履歴をリセット</Button>
       </GlassCard>
+
+      {/* LI.FI API キーは src/apiConfig.ts で管理します（設定画面では編集しません） */}
     </Wrapper>
   );
 };

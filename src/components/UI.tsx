@@ -87,3 +87,84 @@ export const Button = ({ children, onClick, disabled, variant = 'primary', class
     : "bg-slate-800/80 hover:bg-slate-700 text-cyan-100 border border-slate-700";
   return <button onClick={onClick} disabled={disabled} className={`${base} ${styles} ${className} disabled:opacity-50`} >{children}</button>;
 };
+
+// --- Popup / Modal ---
+export const Modal = ({ open, onClose, children }: any) => {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* overlay */}
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+        role="button"
+        aria-label="Close modal"
+      />
+      {/* content */}
+      <div className="relative w-full max-w-md">
+        {children}
+      </div>
+    </div>
+  );
+};
+
+export const Popup = ({
+  open,
+  title,
+  message,
+  details,
+  onClose,
+  primaryLabel = 'OK',
+  secondaryLabel,
+  onSecondary,
+}: any) => {
+  return (
+    <Modal open={open} onClose={onClose}>
+      <GlassCard className="p-0 overflow-hidden">
+        <div className="p-5 border-b border-cyan-500/20">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-base font-bold text-cyan-50">{title || 'お知らせ'}</h3>
+              <p className="text-sm text-slate-300 mt-1 whitespace-pre-wrap">{message}</p>
+            </div>
+            <button
+              className="text-slate-400 hover:text-slate-200 transition text-xl leading-none"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        {details ? (
+          <div className="p-5 pt-3">
+            <details className="text-xs text-slate-400">
+              <summary className="cursor-pointer select-none text-slate-300">詳細</summary>
+              <pre className="mt-2 p-3 rounded-xl bg-slate-950/50 border border-slate-700/60 overflow-auto max-h-48 whitespace-pre-wrap">
+{details}
+              </pre>
+            </details>
+          </div>
+        ) : null}
+
+        <div className="p-5 pt-0 flex gap-2">
+          {secondaryLabel ? (
+            <button
+              onClick={onSecondary}
+              className="flex-1 py-3 rounded-xl font-bold transition duration-200 shadow-md bg-slate-800/80 hover:bg-slate-700 text-cyan-100 border border-slate-700"
+            >
+              {secondaryLabel}
+            </button>
+          ) : null}
+          <button
+            onClick={onClose}
+            className="flex-1 py-3 rounded-xl font-bold transition duration-200 shadow-md bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white"
+          >
+            {primaryLabel}
+          </button>
+        </div>
+      </GlassCard>
+    </Modal>
+  );
+};
