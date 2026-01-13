@@ -30,17 +30,21 @@ export type TxHistory = {
   id: string;
   hash: string;
   type: 'send' | 'receive' | 'swap';
-  amount: string;     // 送信額 (Input Amount)
-  symbol: string;     // 表示用 "ETH > USDC"
+  amount: string;
+  symbol: string;
   from: string;
   to: string;
   date: string;
   network: string;
-  // ★追加: P/L計算用フィールド
-  receivedAmount?: string; // 受取額 (Output Amount)
-  exchangeRate?: number;   // レート (1 InputToken = ? OutputToken)
-  priceInUsd?: number;     // 取引時点のUSD単価
-  priceInJpy?: number;     // 取引時点のJPY単価
+  receivedAmount?: string;
+  exchangeRate?: number;
+  priceInUsd?: number;
+  priceInJpy?: number;
+};
+
+export type PriceCacheData = {
+  price: number;
+  timestamp: number;
 };
 
 export type HistoryCacheData = {
@@ -56,7 +60,9 @@ export type StorageLocal = {
   history?: TxHistory[]; 
   customNetworks?: Record<string, NetworkConfig>;
   historyCache?: Record<string, HistoryCacheData>; 
-  mainNetwork?: string; // ★追加: メイン通貨設定保存用
+  mainNetwork?: string;
+  // ★追加: 価格キャッシュ保存用
+  priceCache?: Record<string, PriceCacheData>;
 };
 
 export type MarketData = {
@@ -93,5 +99,5 @@ export type AlchemyHistory = {
   to: string;
   date: string;
   network: string;
-  receivedAmount?: string; // ★追加: これがないとAPI取得時に消えてしまいます
+  receivedAmount?: string; 
 };

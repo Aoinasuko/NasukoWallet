@@ -1,11 +1,11 @@
-// IDのフォールバック設定 (失敗時に試す代替ID)
+import type { StorageLocal } from '../types';
+
 const ID_ALIASES: Record<string, string> = {
-  "polygon-ecosystem-token": "matic-network", // POLで失敗したらMATICを試す
-  "matic-network": "polygon-ecosystem-token", // MATICで失敗したらPOLを試す
+  "polygon-ecosystem-token": "matic-network",
+  "matic-network": "polygon-ecosystem-token",
   "bnb": "binancecoin",
 };
 
-// 日付文字列からAPI用の DD-MM-YYYY 形式に変換
 const formatDateForApi = (dateStr: string): string | null => {
   try {
     const date = new Date(dateStr);
@@ -19,25 +19,37 @@ const formatDateForApi = (dateStr: string): string | null => {
   }
 };
 
-// ★追加: 待機用関数 (ミリ秒)
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const fetchHistoricalPrice = async (coingeckoId: string, dateStr: string): Promise<number | null> => {
   const apiDate = formatDateForApi(dateStr);
   if (!apiDate || !coingeckoId) return null;
 
-  // 単一IDでの取得を試みる内部関数 (リトライロジック付き)
+  // キャッシュのキーを作成 (例: bitcoin_01-01-2024)
+  const cacheKey = `${coingeckoId}_${apiDate}`;
+
+  // 1. キャッシュ確認 (高速化)
+  try {
+    const local = await chrome.storage.local.get(['priceCache']) as StorageLocal;
+    if (local.priceCache && local.priceCache[cacheKey]) {
+      console.log(`[PriceService] Cache hit for ${cacheKey}`);
+      return local.priceCache[cacheKey].price;
+    }
+  } catch (e) {
+    console.warn("Failed to load price cache", e);
+  }
+
+  // --- 内部関数: API取得ロジック ---
   const tryFetch = async (id: string, retries = 1): Promise<number> => {
     const url = `https://api.coingecko.com/api/v3/coins/${id}/history?date=${apiDate}&localization=false`;
-    
+
     try {
         const res = await fetch(url);
-        
-        // 429エラー (Rate Limit) の場合
+
         if (res.status === 429) {
             if (retries > 0) {
-                console.warn(`API Rate Limit (429) for ${id}. Retrying in 2s...`);
-                await delay(2500); // ★追加: 2.5秒待機してからリトライ
+                console.warn(`API Rate Limit (429) for ${id}. Retrying in 2.5s...`);
+                await delay(2500); 
                 return tryFetch(id, retries - 1);
             }
             throw new Error(`API Rate Limit Exceeded (429)`);
@@ -59,23 +71,47 @@ export const fetchHistoricalPrice = async (coingeckoId: string, dateStr: string)
     }
   };
 
+  // 2. APIから取得
+  let price: number | null = null;
   try {
-    // 1回目のトライ
-    return await tryFetch(coingeckoId);
+    price = await tryFetch(coingeckoId);
   } catch (e) {
-    // 失敗時、代替IDがあればリトライ
     const alias = ID_ALIASES[coingeckoId];
     if (alias) {
         try {
-            console.log(`Retrying historical price for ${coingeckoId} using alias ${alias}...`);
-            await delay(1500); // ★追加: エイリアスを試す前にも少し待つ
-            return await tryFetch(alias);
+            console.log(`Retrying with alias ${alias}...`);
+            await delay(1500);
+            price = await tryFetch(alias);
         } catch (retryError) {
-            console.warn(`Historical price fetch failed for ${alias} (retry):`, retryError);
+            console.warn(`Fetch failed for alias ${alias}:`, retryError);
         }
     } else {
-        console.warn(`Historical price fetch failed for ${coingeckoId}:`, e);
+        console.warn(`Fetch failed for ${coingeckoId}:`, e);
     }
-    return null;
   }
+
+  // 3. 取得できた場合、キャッシュに保存
+  if (price !== null) {
+    try {
+      const local = await chrome.storage.local.get(['priceCache']) as StorageLocal;
+      const cache = local.priceCache || {};
+
+      // キャッシュサイズ制限 (最新20件程度を保持)
+      const keys = Object.keys(cache);
+      if (keys.length >= 20) {
+        // 一番古いデータを削除
+        const oldestKey = keys.reduce((a, b) => cache[a].timestamp < cache[b].timestamp ? a : b);
+        delete cache[oldestKey];
+      }
+
+      // 新しいデータを保存
+      cache[cacheKey] = { price: price, timestamp: Date.now() };
+      await chrome.storage.local.set({ priceCache: cache });
+      console.log(`[PriceService] Saved cache for ${cacheKey}`);
+    } catch (e) {
+      console.warn("Failed to save price cache", e);
+    }
+  }
+
+  return price;
 };
