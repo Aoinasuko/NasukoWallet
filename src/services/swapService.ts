@@ -2,7 +2,9 @@
 
 import { ethers } from 'ethers';
 import { UNISWAP_ADDRESSES } from '../constants';
+import { resolveBestUsdcAddress } from './usdcSelector';
 import { DEFAULT_NETWORKS } from '../constants';
+import { getBridgeQuote, executeBridge } from './bridgeService';
 
 const ERC20_ABI = [
   "function approve(address spender, uint256 amount) external returns (bool)",
@@ -11,7 +13,8 @@ const ERC20_ABI = [
 ];
 
 const ROUTER_ABI = [
-  "function exactInputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) external payable returns (uint256 amountOut)"
+  // Uniswap V3 SwapRouter02 (and SwapRouter) exactInputSingle
+  "function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 deadline,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) external payable returns (uint256 amountOut)"
 ];
 
 const FEE_TIERS = [500, 3000, 10000];
@@ -21,6 +24,10 @@ type SwapQuote = {
   amountOutRaw: bigint;
   tokenIn: string;
   tokenOut: string;
+  /** If true, the quote is from LI.FI (same-chain route) rather than Uniswap V3. */
+  isLifi?: boolean;
+  /** LI.FI quote id (for status tracking etc.). */
+  lifiQuoteId?: string;
 };
 
 /**
@@ -38,6 +45,19 @@ export const getSwapQuote = async (
   const addresses = UNISWAP_ADDRESSES[networkKey];
   if (!addresses) {
     throw new Error(`Real swap not supported on ${networkKey}.`);
+  }
+
+  // Resolve best USDC representation on chains that have multiple variants (e.g., Polygon USDC vs USDC.e)
+  const anyAddr: any = addresses as any;
+  const usdcCandidates = new Set<string>(
+    [addresses.USDC, anyAddr.USDC_NATIVE, anyAddr.USDC_E]
+      .filter(Boolean)
+      .map((x: string) => x.toLowerCase())
+  );
+  const bestUsdc = await resolveBestUsdcAddress(networkKey);
+  if (bestUsdc) {
+    if (usdcCandidates.has(fromTokenAddress.toLowerCase())) fromTokenAddress = bestUsdc;
+    if (usdcCandidates.has(toTokenAddress.toLowerCase())) toTokenAddress = bestUsdc;
   }
 
   const netConfig = DEFAULT_NETWORKS[networkKey];
@@ -60,6 +80,7 @@ export const getSwapQuote = async (
     tokenOut: actualTokenOut,
     fee: 3000,
     recipient: wallet.address,
+    deadline: Math.floor(Date.now() / 1000) + 60 * 10,
     amountIn,
     amountOutMinimum: 0,
     sqrtPriceLimitX96: 0
@@ -86,7 +107,40 @@ export const getSwapQuote = async (
   }
 
   if (!feeFound) {
-    throw new Error("有効な流動性プールが見つかりませんでした。");
+    // Fallback: LI.FI same-chain route (aggregator). This makes the bot robust when Uniswap V3 has no pool
+    // for the requested pair (e.g., WMATIC <-> Native USDC on Polygon).
+    const netConfig = DEFAULT_NETWORKS[networkKey];
+    const chainId = netConfig?.chainId;
+    if (!chainId) {
+      throw new Error("有効な流動性プールが見つかりませんでした。");
+    }
+
+    // LI.FI represents native token as 0x000...000. Our UI may pass "NATIVE" or ZeroAddress.
+    const toIsNative = toTokenAddress === "NATIVE" || toTokenAddress === ethers.ZeroAddress;
+    const fromTokenForLifi = isNativeFrom ? ethers.ZeroAddress : fromTokenAddress;
+    const toTokenForLifi = toIsNative ? ethers.ZeroAddress : toTokenAddress;
+
+    // amount already parsed to raw units above.
+    const lifi = await getBridgeQuote({
+      fromChainId: String(chainId),
+      toChainId: String(chainId),
+      fromTokenAddress: fromTokenForLifi,
+      toTokenAddress: toTokenForLifi,
+      fromAmount: amountIn.toString(),
+      fromAddress: wallet.address,
+      toAddress: wallet.address,
+      slippage: 0.003,
+      integrator: 'wallet-ext-autotrade',
+    });
+    const outMin = BigInt(lifi.estimate.toAmountMin);
+    return {
+      bestFee: -1,
+      amountOutRaw: outMin,
+      tokenIn: actualTokenIn,
+      tokenOut: actualTokenOut,
+      isLifi: true,
+      lifiQuoteId: lifi.id,
+    };
   }
 
   return { bestFee, amountOutRaw: maxOut, tokenIn: actualTokenIn, tokenOut: actualTokenOut };
@@ -105,6 +159,19 @@ export const executeSwap = async (
   const addresses = UNISWAP_ADDRESSES[networkKey];
   if (!addresses) {
     throw new Error(`Real swap not supported on ${networkKey}.`);
+  }
+
+  // Resolve best USDC representation on chains that have multiple variants (e.g., Polygon USDC vs USDC.e)
+  const anyAddr: any = addresses as any;
+  const usdcCandidates = new Set<string>(
+    [addresses.USDC, anyAddr.USDC_NATIVE, anyAddr.USDC_E]
+      .filter(Boolean)
+      .map((x: string) => x.toLowerCase())
+  );
+  const bestUsdc = await resolveBestUsdcAddress(networkKey);
+  if (bestUsdc) {
+    if (usdcCandidates.has(fromTokenAddress.toLowerCase())) fromTokenAddress = bestUsdc;
+    if (usdcCandidates.has(toTokenAddress.toLowerCase())) toTokenAddress = bestUsdc;
   }
 
   const netConfig = DEFAULT_NETWORKS[networkKey];
@@ -149,15 +216,47 @@ export const executeSwap = async (
     tokenOut: actualTokenOut,
     fee: 3000,
     recipient: wallet.address,
+    deadline: Math.floor(Date.now() / 1000) + 60 * 10,
     amountIn: amountIn,
     amountOutMinimum: 0,
     sqrtPriceLimitX96: 0
   };
 
-  // 4. クォート取得 (Fee Tier をスキャンし、見積り受取額を取得)
+  // 4. クォート取得 (Uniswap V3 fee tier scan; fallback to LI.FI same-chain)
   const quote = await getSwapQuote(wallet, networkKey, fromTokenAddress, toTokenAddress, amount, isNativeFrom);
   const bestFee = quote.bestFee;
   const maxOut = quote.amountOutRaw;
+
+  // If Uniswap V3 has no pool, use LI.FI route to execute the swap.
+  if (quote.isLifi || bestFee < 0) {
+    const chainId = netConfig.chainId;
+    if (!chainId) throw new Error('LI.FI swap requires chainId');
+
+    const fromTokenForLifi = isNativeFrom ? ethers.ZeroAddress : fromTokenAddress;
+    const toTokenForLifi = isNativeTo ? ethers.ZeroAddress : toTokenAddress;
+
+    const lifiQuote = await getBridgeQuote({
+      fromChainId: String(chainId),
+      toChainId: String(chainId),
+      fromTokenAddress: fromTokenForLifi,
+      toTokenAddress: toTokenForLifi,
+      fromAmount: amountIn.toString(),
+      fromAddress: wallet.address,
+      toAddress: wallet.address,
+      slippage: 0.003,
+      integrator: 'wallet-ext-autotrade',
+    });
+
+    const { tx } = await executeBridge({
+      wallet,
+      rpcUrl: netConfig.rpc,
+      quote: lifiQuote,
+      fromTokenIsNative: isNativeFrom,
+    });
+
+    const outMin = BigInt(lifiQuote.estimate.toAmountMin);
+    return { tx, amountOutRaw: outMin, quoteOutRaw: outMin };
+  }
 
   console.log(`Selected Best Fee: ${bestFee}, Est Out: ${maxOut}`);
   paramsBase.fee = bestFee;

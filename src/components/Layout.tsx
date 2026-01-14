@@ -76,3 +76,27 @@ export const Wrapper = ({ children, title, bgImage, backAction, networkSelector,
     </div>
   </div>
 );
+
+export const PageWrapper = ({ children, title, bgImage }: any) => (
+  <div className="relative min-h-screen w-full overflow-hidden bg-slate-900 text-cyan-50 font-sans selection:bg-cyan-500/30">
+    {bgImage ? (
+      <div className="absolute inset-0 z-0">
+        <img src={bgImage} className="w-full h-full object-cover" />
+        <div className="absolute inset-0 bg-slate-950/55 mix-blend-multiply"></div>
+      </div>
+    ) : (
+      <div className="absolute inset-0 z-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-cyan-950 via-slate-950 to-black">
+        <div className="absolute -top-40 -right-40 w-96 h-96 bg-cyan-500/20 rounded-full blur-3xl"></div>
+        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-blue-600/20 rounded-full blur-3xl"></div>
+      </div>
+    )}
+    <div className="relative z-10 min-h-screen w-full p-6">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-cyan-300 to-blue-400">
+          {title || "Auto Trading"}
+        </h1>
+      </div>
+      {children}
+    </div>
+  </div>
+);

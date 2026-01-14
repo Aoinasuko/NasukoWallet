@@ -1,11 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Button, GlassCard, Input, Popup } from '../UI';
-import type { NetworkConfig } from '../../types';
-import { encryptData, decryptData } from '../../cryptoUtils';
-import { startBotLoop, stopBotLoop, readTradeLog, type BotRuntimeStatus, type BotStrategy, type StoredBotKey, type BotTradeEvent, type BotLoopHandle } from '../../services/botEngine';
+import type { NetworkConfig, SavedAccount } from '../../types';
+import { decryptData } from '../../cryptoUtils';
+import { startBotLoop, stopBotLoop, readTradeLog, clearTradeLog, type BotRuntimeStatus, type BotStrategy, type BotTradeEvent, type BotLoopHandle } from '../../services/botEngine';
 import { MAJOR_TOKENS_LIST, UNISWAP_ADDRESSES } from '../../constants';
-import { fetchCurrentPrice } from '../../services/priceService';
+import { getTokenPriceUsdCached } from '../../services/tokenPriceCache';
 import { PriceChart, type PricePoint, type TradeMarker } from '../PriceChart';
+import { PageWrapper } from '../Layout';
+import { ethers } from 'ethers';
+import type { TokenData } from '../../types';
+import { fetchHeldTokensBasic, fetchTokenMetadataBasic } from '../../alchemy';
+import { fetchDexScreenerTokenStats } from '../../services/dexScreenerService';
 
 type MajorToken = {
   symbol: string;
@@ -14,426 +19,716 @@ type MajorToken = {
   coingeckoId?: string;
 };
 
-type Props = {
-  allNetworks: Record<string, NetworkConfig>;
+type RecommendedToken = {
+  token: MajorToken;
+  volumeH24Usd: number;
 };
 
-const BOT_KEY_STORAGE_KEY = 'botKey';
-const BOT_STRATEGY_STORAGE_KEY = 'botStrategy';
+type Props = {
+  wallet: ethers.Wallet | ethers.HDNodeWallet | null;
+  networkKey: string;
+  allNetworks: Record<string, NetworkConfig>;
+  bgImage: string | null;
+};
 
-type PopupState = { open: boolean; title: string; message: string; details?: string };
+const RUNNER_BG_KEY = 'autoTradeBgImage';
 
-const Field = ({ label, children }: { label: string; children: any }) => (
-  <div>
-    <div className="text-xs text-white/70 mb-1">{label}</div>
-    {children}
-  </div>
-);
-
-
-export const RunnerView = ({ allNetworks }: Props) => {
-  const networks = useMemo(() => Object.entries(allNetworks || {}), [allNetworks]);
-
-  const [networkKey, setNetworkKey] = useState(networks[0]?.[0] || 'mainnet');
-
-  const majorTokens = useMemo<MajorToken[]>(() => (MAJOR_TOKENS_LIST[networkKey] || []) as any, [networkKey]);
-
-  const [baseTokenAddress, setBaseTokenAddress] = useState<'NATIVE' | 'USDC' | string>('USDC');
+export const RunnerView = ({ wallet, networkKey: appNetworkKey, allNetworks, bgImage }: Props) => {
+  const [networkKey, setNetworkKey] = useState<string>(appNetworkKey);
+  const [resolvedWallet, setResolvedWallet] = useState<ethers.Wallet | ethers.HDNodeWallet | null>(wallet);
+  const [baseTokenAddress, setBaseTokenAddress] = useState<string>('USDC'); // 'USDC' | 'NATIVE' | ERC20 address
   const [targetAddress, setTargetAddress] = useState<string>('');
   const [amountIn, setAmountIn] = useState<string>('50');
   const [takeProfitPct, setTakeProfitPct] = useState<number>(2);
   const [stopLossPct, setStopLossPct] = useState<number>(2);
   const [reentryDropPct, setReentryDropPct] = useState<number>(1);
-  const [pollSeconds, setPollSeconds] = useState<number>(20);
-
-  // Key handling
-  const [passphrase, setPassphrase] = useState('');
-  const [privateKey, setPrivateKey] = useState('');
-  const [hasSavedKey, setHasSavedKey] = useState(false);
-
-  // Update/rotate key
-  const [currentPassphrase, setCurrentPassphrase] = useState('');
-  const [newPrivateKey, setNewPrivateKey] = useState('');
-  const [newPassphrase, setNewPassphrase] = useState('');
+  const [pollSeconds, setPollSeconds] = useState<number>(10);
 
   const [runtime, setRuntime] = useState<BotRuntimeStatus>({ running: false, phase: 'IDLE' });
-  const [popup, setPopup] = useState<PopupState>({ open: false, title: '', message: '' });
-
-  const [baseHistory, setBaseHistory] = useState<PricePoint[]>([]);
-  const [targetHistory, setTargetHistory] = useState<PricePoint[]>([]);
-  const [markers, setMarkers] = useState<TradeMarker[]>([]);
-  const lastPriceBasePerTargetRef = useRef<number | undefined>(undefined);
-
   const botHandleRef = useRef<BotLoopHandle | null>(null);
 
-  const selectedTarget: MajorToken | undefined = useMemo(() => majorTokens.find(t => t.address === targetAddress), [majorTokens, targetAddress]);
+  const [popup, setPopup] = useState<{ title: string; message: string; details?: string } | null>(null);
 
-  const baseTokenSymbol = useMemo(() => {
-    const nativeSym = allNetworks[networkKey]?.symbol || 'NATIVE';
-    if (baseTokenAddress === 'NATIVE') return nativeSym;
-    if (baseTokenAddress === 'USDC') return 'USDC';
-    const wrapped = UNISWAP_ADDRESSES[networkKey]?.WETH;
-    if (wrapped && baseTokenAddress.toLowerCase() === wrapped.toLowerCase()) return `Wrapped ${nativeSym}`;
-    const t = majorTokens.find((x) => x.address.toLowerCase() === baseTokenAddress.toLowerCase());
-    return t?.symbol || 'TOKEN';
-  }, [baseTokenAddress, allNetworks, networkKey, majorTokens]);
+  const [runnerBg, setRunnerBg] = useState<string | null>(null);
 
-  const strategy: BotStrategy = useMemo(() => {
-    const sym = selectedTarget?.symbol || '';
-    return {
-      networkKey,
-      baseTokenAddress,
-      baseTokenSymbol,
-      targetTokenAddress: targetAddress,
-      targetTokenSymbol: sym,
-      amountIn,
-      takeProfitPct,
-      stopLossPct,
-      reentryDropPct,
-      pollSeconds,
-    };
-  }, [networkKey, baseTokenAddress, baseTokenSymbol, targetAddress, selectedTarget, amountIn, takeProfitPct, stopLossPct, reentryDropPct, pollSeconds]);
-
-  const loadSaved = async () => {
-    const local = await chrome.storage.local.get([BOT_KEY_STORAGE_KEY, BOT_STRATEGY_STORAGE_KEY]);
-    const savedKey = local[BOT_KEY_STORAGE_KEY] as StoredBotKey | undefined;
-    const savedStrat = local[BOT_STRATEGY_STORAGE_KEY] as BotStrategy | undefined;
-    setHasSavedKey(!!savedKey?.ciphertext);
-
-    if (savedStrat) {
-      setNetworkKey(savedStrat.networkKey || networkKey);
-      setBaseTokenAddress((savedStrat.baseTokenAddress as any) || 'USDC');
-      setTargetAddress(savedStrat.targetTokenAddress || '');
-      setAmountIn(savedStrat.amountIn || '50');
-      setTakeProfitPct(Number(savedStrat.takeProfitPct) || 2);
-      setStopLossPct(Number(savedStrat.stopLossPct) || 2);
-      setReentryDropPct(Number(savedStrat.reentryDropPct) || 1);
-      setPollSeconds(Number(savedStrat.pollSeconds) || 20);
-    }
-  };
-
+  // token sources
+  const [heldTokens, setHeldTokens] = useState<TokenData[]>([]);
+  const [customTargetAddr, setCustomTargetAddr] = useState<string>('');
+  const [customTargets, setCustomTargets] = useState<MajorToken[]>([]);
+  const [recommended, setRecommended] = useState<RecommendedToken[]>([]);
   useEffect(() => {
-    loadSaved();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setResolvedWallet(wallet);
+  }, [wallet]);
+
+  // Restore wallet in Runner tab using the same vault/session as the main popup.
+  useEffect(() => {
+    const restore = async () => {
+      try {
+        if (resolvedWallet) return;
+
+        const sess = await chrome.storage.session.get(['masterPass']);
+        const masterPass = (sess.masterPass as string | undefined) || '';
+        if (!masterPass) { throw new Error('ログインしていません。ホーム画面でログインしてから自動取引タブを開いてください。'); }
+        if (!masterPass) return;
+
+        const local = await chrome.storage.local.get(['accounts', 'lastUnlockedAccount']);
+        const accounts = (local.accounts as SavedAccount[] | undefined) || [];
+        if (!accounts.length) return;
+
+        const preferred = (local.lastUnlockedAccount as string | undefined) || '';
+        const acc = (preferred ? accounts.find(a => a.address.toLowerCase() === preferred.toLowerCase()) : null) || accounts[0];
+
+        const jsonKeystore = acc.encryptedJson;
+        const pwdDecrypted = decryptData(acc.encryptedPassword, masterPass);
+
+        if (typeof jsonKeystore !== 'string' || jsonKeystore.trim().length < 10) {
+          throw new Error('ログイン情報が不正です（Keystore JSONが空）。ホーム画面でアカウントを再インポートしてください。');
+        }
+        if (typeof pwdDecrypted !== 'string' || pwdDecrypted.trim().length === 0) {
+          throw new Error('ログイン情報の復号に失敗しました（パスワードが不正）。ホーム画面でログインし直してください。');
+        }
+
+        // ethers keystore JSON must be a JSON object string
+        const json = jsonKeystore.trim();
+        const pwd = pwdDecrypted;
+
+        const w = await ethers.Wallet.fromEncryptedJson(json, pwd);
+        setResolvedWallet(w);
+      } catch (e: any) {
+        setPopup({
+          title: '自動取引',
+          message: 'ログイン情報の復元に失敗しました。',
+          details: String(e?.stack || e?.message || e),
+        });
+      }
+    };
+    restore();
+  }, [resolvedWallet]);
+
+  // charts
+  const [tfHours, setTfHours] = useState<1 | 12 | 24>(1);
+  const [basePoints, setBasePoints] = useState<PricePoint[]>([]);
+  const [targetPoints, setTargetPoints] = useState<PricePoint[]>([]);
+  const [tradeLog, setTradeLog] = useState<BotTradeEvent[]>([]);
+
+  // keep local networkKey in sync with app
+  useEffect(() => { setNetworkKey(appNetworkKey); }, [appNetworkKey]);
+
+  // load runner background
+  useEffect(() => {
+    (async () => {
+      const local = await chrome.storage.local.get([RUNNER_BG_KEY]);
+      const saved = local[RUNNER_BG_KEY] as string | undefined;
+      if (saved) setRunnerBg(saved);
+    })();
   }, []);
 
-  // Persist strategy whenever it changes
+  const majorTokens: MajorToken[] = useMemo(() => {
+    const list = MAJOR_TOKENS_LIST[networkKey] || [];
+    // ensure unique by address
+    const m = new Map<string, MajorToken>();
+    for (const t of list) m.set(t.address.toLowerCase(), t);
+    return [...m.values()];
+  }, [networkKey]);
+
+  // Fetch held ERC20 tokens for the logged-in account (Runner uses vault/session).
   useEffect(() => {
-    chrome.storage.local.set({ [BOT_STRATEGY_STORAGE_KEY]: strategy });
-  }, [strategy]);
-
-  const showErr = (title: string, message: string, details?: string) =>
-    setPopup({ open: true, title, message, details });
-
-  const handleSaveKey = async () => {
-    try {
-      if (!passphrase || passphrase.length < 4) throw new Error('パスフレーズを入力してください（4文字以上推奨）');
-      if (!privateKey || !privateKey.startsWith('0x') || privateKey.length < 66) throw new Error('秘密鍵が不正です（0xから始まる64桁hex）');
-
-      const ciphertext = encryptData({ privateKey }, passphrase);
-      const stored: StoredBotKey = { ciphertext };
-      await chrome.storage.local.set({ [BOT_KEY_STORAGE_KEY]: stored });
-      setHasSavedKey(true);
-      setPrivateKey('');
-      showErr('保存完了', '秘密鍵を暗号化して保存しました。');
-    } catch (e: any) {
-      showErr('保存失敗', e?.message || 'Failed to save key', String(e));
-    }
-  };
-
-  const handleUpdateKey = async () => {
-    try {
-      const local = await chrome.storage.local.get([BOT_KEY_STORAGE_KEY]);
-      const stored = local[BOT_KEY_STORAGE_KEY] as StoredBotKey | undefined;
-      if (!stored?.ciphertext) throw new Error('保存済みの秘密鍵がありません');
-
-      if (!currentPassphrase) throw new Error('現在のパスフレーズを入力してください');
-      // verify and get existing key
-      const decrypted = decryptData(stored.ciphertext, currentPassphrase) as any;
-      const existingPk = decrypted?.privateKey;
-      if (!existingPk) throw new Error('復号に失敗しました（パスフレーズが違う可能性があります）');
-
-      const nextPk = newPrivateKey ? newPrivateKey : existingPk;
-      if (!nextPk.startsWith('0x') || nextPk.length < 66) throw new Error('新しい秘密鍵が不正です');
-
-      const nextPass = newPassphrase ? newPassphrase : currentPassphrase;
-      if (nextPass.length < 4) throw new Error('新しいパスフレーズが短すぎます');
-
-      const ciphertext = encryptData({ privateKey: nextPk }, nextPass);
-      await chrome.storage.local.set({ [BOT_KEY_STORAGE_KEY]: { ciphertext } as StoredBotKey });
-
-      setHasSavedKey(true);
-      setCurrentPassphrase('');
-      setNewPrivateKey('');
-      setNewPassphrase('');
-      showErr('更新完了', '秘密鍵/パスフレーズを更新しました。');
-    } catch (e: any) {
-      showErr('更新失敗', e?.message || 'Failed to update key', String(e));
-    }
-  };
-
-  const handleDeleteKey = async () => {
-    await chrome.storage.local.remove([BOT_KEY_STORAGE_KEY]);
-    setHasSavedKey(false);
-    showErr('削除', '保存済み秘密鍵を削除しました。');
-  };
-
-  const resolveRpcUrl = (): string => {
-    const rpc = allNetworks[networkKey]?.rpc;
-    if (!rpc) throw new Error('RPCが設定されていません');
-    return rpc;
-  };
-
-  const resolveBaseCoingeckoId = (): string | null => {
-    if (baseTokenAddress === 'USDC') return 'usd-coin';
-    return allNetworks[networkKey]?.coingeckoId || null;
-  };
-
-  const resolveTargetCoingeckoId = (): string | null => {
-    return selectedTarget?.coingeckoId || null;
-  };
-
-  const fetchChartTick = async () => {
-    try {
-      const now = Date.now();
-      const baseId = resolveBaseCoingeckoId();
-      const targetId = resolveTargetCoingeckoId();
-
-      let baseUsd: number | null = null;
-      if (baseId === 'usd-coin') baseUsd = 1;
-      else if (baseId) baseUsd = (await fetchCurrentPrice(baseId))?.usd ?? null;
-
-      let targetUsd: number | null = null;
-      if (targetId) {
-        targetUsd = (await fetchCurrentPrice(targetId))?.usd ?? null;
-      } else if (baseUsd != null && lastPriceBasePerTargetRef.current != null) {
-        // priceBasePerTarget * baseUsd = targetUsd
-        targetUsd = lastPriceBasePerTargetRef.current * baseUsd;
+    const run = async () => {
+      try {
+        if (!resolvedWallet?.address) {
+          setHeldTokens([]);
+          return;
+        }
+        const tokens = await fetchHeldTokensBasic(resolvedWallet.address, networkKey);
+        // Normalize + unique by address
+        const m = new Map<string, TokenData>();
+        for (const t of tokens) {
+          m.set(t.address.toLowerCase(), t);
+        }
+        setHeldTokens([...m.values()]);
+      } catch (e) {
+        console.warn('fetchHeldTokensBasic failed', e);
+        setHeldTokens([]);
       }
+    };
+    run();
+  }, [resolvedWallet?.address, networkKey]);
 
-      if (baseUsd != null) {
-        setBaseHistory(prev => [...prev, { t: now, value: baseUsd }].slice(-240));
-      }
-      if (targetUsd != null) {
-        setTargetHistory(prev => [...prev, { t: now, value: targetUsd }].slice(-240));
-      }
-    } catch (e) {
-      // chart failure should not block bot
-      console.warn('chart tick failed', e);
-    }
-  };
-
-  // chart interval: 1 minute
+  // Build recommended tokens from major list based on DexScreener 24h volume.
   useEffect(() => {
-    fetchChartTick();
-    const id = window.setInterval(() => { fetchChartTick(); }, 60_000);
-    return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const list = majorTokens;
+        if (!list.length) {
+          if (!cancelled) setRecommended([]);
+          return;
+        }
+        const stats = await Promise.all(
+          list.map(async (t) => {
+            const s = await fetchDexScreenerTokenStats({ networkKey, tokenAddress: t.address });
+            return { t, vol: Number(s?.volumeH24Usd ?? 0) };
+          })
+        );
+        const ranked = stats
+          .filter(x => x.vol > 0)
+          .sort((a, b) => b.vol - a.vol)
+          .slice(0, 5)
+          .map(x => ({ token: x.t, volumeH24Usd: x.vol }));
+        if (!cancelled) setRecommended(ranked);
+      } catch (e) {
+        if (!cancelled) setRecommended([]);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [networkKey, majorTokens]);
+
+  const allTargetOptions: MajorToken[] = useMemo(() => {
+    const m = new Map<string, MajorToken>();
+    for (const t of majorTokens) m.set(t.address.toLowerCase(), t);
+    for (const t of heldTokens) {
+      // held tokens may not have coingeckoId
+      m.set(t.address.toLowerCase(), { symbol: t.symbol, address: t.address, name: t.name });
+    }
+    for (const t of customTargets) m.set(t.address.toLowerCase(), t);
+    return [...m.values()];
+  }, [majorTokens, heldTokens, customTargets]);
+
+  const selectedTarget: MajorToken | undefined = useMemo(() => {
+    if (!targetAddress) return undefined;
+    return allTargetOptions.find(t => t.address.toLowerCase() === targetAddress.toLowerCase());
+  }, [allTargetOptions, targetAddress]);
+
+  const resolveBaseTokenAddressForSwap = (): string => {
+    if (baseTokenAddress === 'USDC') return UNISWAP_ADDRESSES[networkKey]?.USDC ?? '';
+    if (baseTokenAddress === 'NATIVE') return 'NATIVE'; // swapService handles NATIVE sentinel
+    return baseTokenAddress; // ERC20 address
+  };
+
+  const resolveTargetTokenAddressForSwap = (): string => {
+    if (!targetAddress) return '';
+    return targetAddress;
+  };
+
+  const baseLabel = useMemo(() => {
+    if (baseTokenAddress === 'USDC') return 'USDC';
+    if (baseTokenAddress === 'NATIVE') return allNetworks[networkKey]?.symbol || 'NATIVE';
+    const tMaj = majorTokens.find(x => x.address.toLowerCase() === baseTokenAddress.toLowerCase());
+    if (tMaj) return tMaj.symbol;
+    const tHeld = heldTokens.find(x => x.address.toLowerCase() === baseTokenAddress.toLowerCase());
+    return tHeld ? tHeld.symbol : 'TOKEN';
+  }, [baseTokenAddress, allNetworks, networkKey, majorTokens, heldTokens]);
+
+  const formatUsd = (v: number): string => {
+    if (v >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(2)}B`;
+    if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
+    if (v >= 1_000) return `$${(v / 1_000).toFixed(1)}K`;
+    return `$${Math.round(v)}`;
+  };
+
+  const addCustomTarget = async () => {
+    try {
+      const addr = customTargetAddr.trim();
+      if (!addr || !addr.startsWith('0x') || addr.length !== 42) {
+        setPopup({ title: 'カスタムトークン', message: '有効なトークンアドレスを入力してください（0xから始まる42文字）。' });
+        return;
+      }
+      const md = await fetchTokenMetadataBasic(addr, networkKey);
+      const tok: MajorToken = {
+        address: addr,
+        symbol: md?.symbol || 'TOKEN',
+        name: md?.name || 'Custom Token',
+      };
+      setCustomTargets(prev => {
+        const m = new Map<string, MajorToken>();
+        for (const t of prev) m.set(t.address.toLowerCase(), t);
+        m.set(addr.toLowerCase(), tok);
+        return [...m.values()];
+      });
+      setTargetAddress(addr);
+      setCustomTargetAddr('');
+    } catch (e: any) {
+      setPopup({ title: 'カスタムトークン', message: `トークン情報の取得に失敗しました。\n${String(e?.message || e)}` });
+    }
+  };
+
+  const strategy: BotStrategy = useMemo(() => ({
+    networkKey,
+    baseTokenAddress: resolveBaseTokenAddressForSwap(),
+    baseTokenSymbol: baseLabel,
+    targetTokenAddress: resolveTargetTokenAddressForSwap(),
+    targetTokenSymbol: selectedTarget?.symbol || '',
+    amountIn,
+    takeProfitPct,
+    stopLossPct,
+    reentryDropPct,
+    pollSeconds: Math.max(10, Math.floor(pollSeconds || 10)),
+  }), [networkKey, baseTokenAddress, baseLabel, targetAddress, selectedTarget, amountIn, takeProfitPct, stopLossPct, reentryDropPct, pollSeconds]);
+
+  // read trade log periodically (and use it for markers + PnL)
+  useEffect(() => {
+    let timer: any;
+    const run = async () => {
+      const log = await readTradeLog();
+      setTradeLog(log);
+    };
+    run();
+    timer = setInterval(run, 10_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const markers: TradeMarker[] = useMemo(() => {
+    return tradeLog.map(e => ({ t: e.t, label: e.kind === 'ENTRY' ? 'BUY' : 'SELL' }));
+  }, [tradeLog]);
+
+  // PnL estimation from tradeLog pairs (ENTRY->EXIT)
+  const pnlUsd = useMemo(() => {
+    // base is assumed USD-ish (USDC=1). For native base, we use base USD from chart latest.
+    const latestBaseUsd = basePoints.length ? basePoints[basePoints.length - 1].value : 0;
+    const baseIsUsd = baseTokenAddress === 'USDC';
+    const amountBase = Number(strategy.amountIn || 0);
+    let total = 0;
+    let wins = 0;
+    let losses = 0;
+    let openEntryPrice: number | null = null;
+
+    for (const e of tradeLog) {
+      if (e.kind === 'ENTRY' && typeof e.priceBasePerTarget === 'number') {
+        openEntryPrice = e.priceBasePerTarget;
+      } else if (e.kind === 'EXIT' && openEntryPrice !== null && typeof e.priceBasePerTarget === 'number') {
+        const entryPrice = openEntryPrice;
+        const exitPrice = e.priceBasePerTarget;
+        // target amount in units = amountBase / entryPrice
+        const targetAmt = entryPrice > 0 ? (amountBase / entryPrice) : 0;
+        const baseBack = targetAmt * exitPrice;
+        const pnlBase = baseBack - amountBase;
+        const pnl = baseIsUsd ? pnlBase : pnlBase * (latestBaseUsd || 0);
+        total += pnl;
+        if (pnl >= 0) wins += 1; else losses += 1;
+        openEntryPrice = null;
+      }
+    }
+    return { total, wins, losses };
+  }, [tradeLog, strategy.amountIn, baseTokenAddress, basePoints]);
+
+  // chart polling (10 sec) - uses cached price source (DexScreener + cache)
+  useEffect(() => {
+    let timer: any;
+
+    const poll = async () => {
+      try {
+        const now = Date.now();
+        const baseAddrForPrice = (() => {
+          if (baseTokenAddress === 'USDC') return UNISWAP_ADDRESSES[networkKey]?.USDC ?? null;
+          if (baseTokenAddress === 'NATIVE') return UNISWAP_ADDRESSES[networkKey]?.WETH ?? null; // wrapped native
+          return baseTokenAddress || null;
+        })();
+        const targetAddrForPrice = targetAddress || null;
+
+        // IMPORTANT: don't default non-stables to 1 USD (it breaks WMATIC/WPOL charts).
+        // Only append a point when we actually have a price.
+        let baseUsd: number | null = null;
+        if (baseTokenAddress === 'USDC') {
+          baseUsd = 1;
+        } else if (baseAddrForPrice) {
+          const v = await getTokenPriceUsdCached({ networkKey, tokenAddress: baseAddrForPrice });
+          if (typeof v === 'number' && Number.isFinite(v) && v > 0) baseUsd = v;
+        }
+
+        let targetUsd: number | null = null;
+        if (targetAddrForPrice) {
+          const v = await getTokenPriceUsdCached({ networkKey, tokenAddress: targetAddrForPrice });
+          if (typeof v === 'number' && Number.isFinite(v) && v > 0) targetUsd = v;
+        }
+
+        const maxPoints = 9000; // ~25h at 10s
+        if (baseUsd !== null) {
+          setBasePoints(prev => {
+            const next = [...prev, { t: now, value: baseUsd as number }];
+            return next.length > maxPoints ? next.slice(next.length - maxPoints) : next;
+          });
+        }
+        if (targetUsd !== null) {
+          setTargetPoints(prev => {
+            const next = [...prev, { t: now, value: targetUsd }];
+            return next.length > maxPoints ? next.slice(next.length - maxPoints) : next;
+          });
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    poll();
+    timer = setInterval(poll, 10_000);
+    return () => clearInterval(timer);
   }, [networkKey, baseTokenAddress, targetAddress]);
 
-  // Load trade markers (and keep updated)
-  const refreshMarkers = async () => {
-    const log = await readTradeLog();
-    const m: TradeMarker[] = log.slice(-50).map(e => ({ t: e.t, label: e.kind === 'ENTRY' ? 'BUY' : 'SELL' }));
-    setMarkers(m);
+  const filteredBasePoints = useMemo(() => {
+    const cutoff = Date.now() - tfHours * 3600_000;
+    return basePoints.filter(p => p.t >= cutoff);
+  }, [basePoints, tfHours]);
+
+  const filteredTargetPoints = useMemo(() => {
+    const cutoff = Date.now() - tfHours * 3600_000;
+    return targetPoints.filter(p => p.t >= cutoff);
+  }, [targetPoints, tfHours]);
+
+  const handleSetRunnerBg = async (file?: File) => {
+    try {
+      if (!file) {
+        setRunnerBg(null);
+        await chrome.storage.local.remove(RUNNER_BG_KEY);
+        return;
+      }
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('画像の読み込みに失敗しました'));
+        reader.readAsDataURL(file);
+      });
+      setRunnerBg(dataUrl);
+      await chrome.storage.local.set({ [RUNNER_BG_KEY]: dataUrl });
+    } catch (e: any) {
+      setPopup({ title: '背景画像', message: e?.message || '背景画像の設定に失敗しました' });
+    }
   };
 
-  useEffect(() => {
-    refreshMarkers();
-  }, []);
+  
+  const ensurePrivateKey = async (): Promise<string> => {
+    // 1) If we already have a Wallet instance with privateKey, use it.
+    const existingPk = (resolvedWallet as any)?.privateKey as string | undefined;
+    if (existingPk) return existingPk;
 
-  const handleStart = async () => {
+    // 2) Try to restore from vault/session (same behavior as App unlock).
+    const sess = await chrome.storage.session.get(['masterPass']);
+    const masterPass = (sess.masterPass as string | undefined) || '';
+    if (!masterPass) throw new Error('ログインが必要です（ホーム画面でログイン/解除してから実行してください）');
+
+    const local = await chrome.storage.local.get(['accounts', 'lastUnlockedAccount']);
+    const accounts = (local.accounts as SavedAccount[] | undefined) || [];
+    if (!accounts.length) throw new Error('アカウントが見つかりません（先にホームでアカウントを追加してください）');
+
+    const preferred = (local.lastUnlockedAccount as string | undefined) || '';
+    const acc =
+      (preferred ? accounts.find(a => a.address.toLowerCase() === preferred.toLowerCase()) : undefined) ||
+      accounts[0];
+
+    if (!masterPass) {
+      throw new Error('ログインしていません。ホーム画面でログインしてから自動取引タブを開いてください。');
+    }
+    if (!acc) {
+      throw new Error('アカウントが見つかりません。ホーム画面でアカウントを作成/インポートしてください。');
+    }
     try {
-      if (runtime.running) return;
-      if (!targetAddress) throw new Error('Targetトークンを選択してください');
-      if (!amountIn || Number(amountIn) <= 0) throw new Error('投入額が不正です');
+      const jsonKeystore = acc.encryptedJson;
+      const pwdDecrypted = decryptData((acc as any).encryptedPassword, masterPass);
 
-      const rpcUrl = resolveRpcUrl();
-
-      const local = await chrome.storage.local.get([BOT_KEY_STORAGE_KEY]);
-      const stored = local[BOT_KEY_STORAGE_KEY] as StoredBotKey | undefined;
-      if (!stored?.ciphertext) throw new Error('秘密鍵が保存されていません（まず保存してください）');
-      if (!passphrase) throw new Error('起動用パスフレーズを入力してください');
-
-      const decrypted = decryptData(stored.ciphertext, passphrase) as any;
-      const pk = decrypted?.privateKey;
-      if (!pk) throw new Error('復号に失敗しました（パスフレーズが違う可能性があります）');
-
-      // Pre-check: USDC configured if chosen
-      if (baseTokenAddress === 'USDC') {
-        const usdc = UNISWAP_ADDRESSES[networkKey]?.USDC;
-        if (!usdc) throw new Error('このネットワークにはUSDC設定がありません');
+      if (typeof jsonKeystore !== 'string' || jsonKeystore.trim().length < 10) {
+        throw new Error('ログイン情報が不正です（Keystore JSONが空）。ホーム画面でアカウントを再インポートしてください。');
+      }
+      if (typeof pwdDecrypted !== 'string' || pwdDecrypted.trim().length === 0) {
+        throw new Error('ログイン情報の復号に失敗しました（パスワードが不正）。ホーム画面でログインし直してください。');
       }
 
+      const w = await ethers.Wallet.fromEncryptedJson(jsonKeystore.trim(), pwdDecrypted);
+      setResolvedWallet(w);
+      const pk = (w as any).privateKey as string | undefined;
+      if (!pk) throw new Error('このアカウントは秘密鍵が取得できません（インポート型のアカウントで試してください）');
+      return pk;
+    } catch (e: any) {
+      throw new Error(e?.message || 'ウォレットの復元に失敗しました');
+    }
+  };
+
+const start = async () => {
+    try {
+      const pk = await ensurePrivateKey();
+      if (!strategy.targetTokenAddress) throw new Error('交換先トークンを選択してください');
+      if (!strategy.baseTokenAddress) throw new Error('交換元通貨を選択してください');
+
+      const rpcUrl = allNetworks[networkKey]?.rpc;
+      if (!rpcUrl) throw new Error('RPCが見つかりません');
       botHandleRef.current = startBotLoop({
         privateKey: pk,
         rpcUrl,
         strategy,
-        onStatus: (s) => {
-          setRuntime(s);
-          if (s.lastPrice != null) lastPriceBasePerTargetRef.current = s.lastPrice;
-        },
-        onTrade: async (_e: BotTradeEvent) => {
-          await refreshMarkers();
-          await fetchChartTick();
-        },
-        onError: (e) => {
-          showErr('Bot error', e.message, e.details);
-        },
+        onStatus: setRuntime,
+        onError: (e) => setPopup({ title: '自動取引エラー', message: String((e as any)?.details || (e as any)?.message || e) }),
       });
-
-      showErr('起動', '自動取引を開始しました。Runnerタブを閉じると停止します。');
     } catch (e: any) {
-      showErr('開始失敗', e?.message || 'Failed to start', String(e));
+      setPopup({
+        title: '開始できません',
+        message: String(e?.message || '不明なエラーが発生しました。'),
+        details: String(e?.stack || e),
+      });
     }
   };
 
-  const handleStop = async () => {
+  const stop = () => {
     try {
       if (botHandleRef.current) {
         stopBotLoop(botHandleRef.current);
         botHandleRef.current = null;
       }
       setRuntime({ running: false, phase: 'IDLE' });
-      showErr('停止', '自動取引を停止しました。');
     } catch (e: any) {
-      showErr('停止失敗', e?.message || 'Failed to stop', String(e));
+      setPopup({ title: '停止できません', message: e?.message || String(e) });
     }
   };
 
+  const tfButton = (h: 1|12|24, label: string) => (
+    <button
+      onClick={() => setTfHours(h)}
+      className={`px-3 py-1 rounded-lg text-xs border ${tfHours===h ? 'bg-cyan-600/30 border-cyan-300/40 text-cyan-100' : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'}`}
+    >
+      {label}
+    </button>
+  );
+
+  const title = '自動取引';
+
   return (
-    <div className="max-w-3xl mx-auto p-4 space-y-4">
-      <div className="text-xl font-semibold text-white/90">🤖 Auto Trader Runner</div>
-
-      <GlassCard>
-        <div className="text-sm font-semibold text-white/90 mb-3">戦略設定</div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <div className="text-xs text-white/70 mb-1">Network</div>
-            <select
-              className="w-full rounded-xl bg-white/10 border border-white/10 px-3 py-2 text-sm text-white/90"
-              value={networkKey}
-              onChange={(e) => setNetworkKey(e.target.value)}
-            >
-              {networks.map(([k, n]) => (
-                <option key={k} value={k}>{n.name} ({n.symbol})</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <div className="text-xs text-white/70 mb-1">Base</div>
-            <select
-              className="w-full rounded-xl bg-white/10 border border-white/10 px-3 py-2 text-sm text-white/90"
-              value={baseTokenAddress}
-              onChange={(e) => setBaseTokenAddress(e.target.value as any)}
-            >
-              <option value="USDC">USDC</option>
-              <option value="NATIVE">Native ({allNetworks[networkKey]?.symbol || 'NATIVE'})</option>
-
-              {UNISWAP_ADDRESSES[networkKey]?.WETH ? (
-                <option value={UNISWAP_ADDRESSES[networkKey]!.WETH}>
-                  Wrapped {allNetworks[networkKey]?.symbol || 'NATIVE'}
-                </option>
-              ) : null}
-              <optgroup label="Major tokens">
-                {majorTokens.map((t) => (
-                  <option key={t.address} value={t.address}>
-                    {t.symbol} - {t.name}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-          </div>
-
-          <div className="md:col-span-2">
-            <div className="text-xs text-white/70 mb-1">Target token</div>
-            <select
-              className="w-full rounded-xl bg-white/10 border border-white/10 px-3 py-2 text-sm text-white/90"
-              value={targetAddress}
-              onChange={(e) => setTargetAddress(e.target.value)}
-            >
-              <option value="">Select token…</option>
-              {majorTokens.map((t) => (
-                <option key={t.address} value={t.address}>{(UNISWAP_ADDRESSES[networkKey]?.WETH && t.address.toLowerCase() === UNISWAP_ADDRESSES[networkKey]!.WETH.toLowerCase()) ? `Wrapped ${allNetworks[networkKey]?.symbol || 'NATIVE'}` : t.symbol} - {t.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <Field label={`投入額（${baseTokenSymbol}）`}><Input value={amountIn} onChange={(e:any)=>setAmountIn(e.target.value)} /></Field>
-          <Field label="Polling seconds"><Input value={String(pollSeconds)} onChange={(e:any)=>setPollSeconds(Number(e.target.value)||20)} /></Field>
-
-          <Field label="Take Profit %"><Input value={String(takeProfitPct)} onChange={(e:any)=>setTakeProfitPct(Number(e.target.value)||0)} /></Field>
-          <Field label="Stop Loss %"><Input value={String(stopLossPct)} onChange={(e:any)=>setStopLossPct(Number(e.target.value)||0)} /></Field>
-          <Field label="Re-entry drop %"><Input value={String(reentryDropPct)} onChange={(e:any)=>setReentryDropPct(Number(e.target.value)||0)} /></Field>
-        </div>
-
-        <div className="mt-4 text-xs text-white/70">
-          Status: <span className="text-white/90">{runtime.running ? 'RUNNING' : 'STOPPED'}</span> / Phase: <span className="text-white/90">{runtime.phase}</span>
-          {runtime.lastPrice != null && (
-            <span className="ml-2">Price(base/target): <span className="text-white/90">{runtime.lastPrice.toLocaleString(undefined,{maximumFractionDigits: 10})}</span></span>
-          )}
-          {runtime.message && <span className="ml-2 text-white/70">({runtime.message})</span>}
-        </div>
-
-        <div className="mt-4 flex gap-2">
-          <Button onClick={handleStart} disabled={runtime.running}>Start</Button>
-          <Button variant="secondary" onClick={handleStop} disabled={!runtime.running}>Stop</Button>
-        </div>
-      </GlassCard>
-
-      <GlassCard>
-        <div className="text-sm font-semibold text-white/90 mb-3">🔐 秘密鍵</div>
-
-        <div className="text-xs text-white/70 mb-2">
-          保存済み: <span className="text-white/90">{hasSavedKey ? 'あり' : 'なし'}</span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Field label="Bot key passphrase（起動時に使用）"><Input value={passphrase} onChange={(e:any)=>setPassphrase(e.target.value)} /></Field>
-          <Field label="Bot private key（初回保存用）"><Input value={privateKey} onChange={(e:any)=>setPrivateKey(e.target.value)} /></Field>
-
-          <div className="md:col-span-2 flex gap-2">
-            <Button onClick={handleSaveKey}>秘密鍵を暗号化して保存</Button>
-            <Button variant="secondary" onClick={handleDeleteKey} disabled={!hasSavedKey}>保存済み鍵を削除</Button>
-          </div>
-        </div>
-
-        <div className="mt-5 border-t border-white/10 pt-4">
-          <div className="text-xs font-semibold text-white/80 mb-2">秘密鍵の修正（更新/パスフレーズ変更）</div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Field label="現在のパスフレーズ"><Input value={currentPassphrase} onChange={(e:any)=>setCurrentPassphrase(e.target.value)} /></Field>
-            <Field label="新しい秘密鍵（空なら保持）"><Input value={newPrivateKey} onChange={(e:any)=>setNewPrivateKey(e.target.value)} /></Field>
-            <Field label="新しいパスフレーズ（空なら保持）"><Input value={newPassphrase} onChange={(e:any)=>setNewPassphrase(e.target.value)} /></Field>
-            <div className="md:col-span-2">
-              <Button onClick={handleUpdateKey} disabled={!hasSavedKey}>更新する</Button>
-            </div>
-          </div>
-          <div className="mt-2 text-[11px] text-white/60">
-            ※現在のパスフレーズで復号できた場合のみ更新します。自分用でも少額運用推奨。
-          </div>
-        </div>
-      </GlassCard>
-
-      <GlassCard>
-        <div className="text-sm font-semibold text-white/90 mb-3">📈 チャート（1分ごと更新）</div>
-        <div className="space-y-4">
-          <PriceChart title={`${baseTokenSymbol} price (USD)`} points={baseHistory} markers={markers} valueSuffix=" USD" />
-          <PriceChart title={`${selectedTarget?.symbol || 'Target'} price (USD)`} points={targetHistory} markers={markers} valueSuffix=" USD" />
-          <div className="text-[11px] text-white/60">
-            BUY/SELL の縦線は、自動取引で送信したトランザクション時刻（端末時刻）です。
-          </div>
-        </div>
-      </GlassCard>
-
+    <PageWrapper title={title} bgImage={runnerBg || bgImage}>
       <Popup
-        open={popup.open}
-        title={popup.title}
-        message={popup.message}
-        details={popup.details}
-        onClose={() => setPopup({ open: false, title: '', message: '' })}
+        open={!!popup}
+        title={popup?.title || ''}
+        message={popup?.message || ''}
+        details={popup?.details}
+        onClose={() => setPopup(null)}
       />
-    </div>
+
+      <div className="flex flex-col gap-4"><div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Left: settings + logs */}
+          <div className="space-y-4">
+            <GlassCard className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="font-semibold text-cyan-100">設定</div>
+                <div className={`text-xs px-2 py-1 rounded-lg border ${runtime.running ? 'border-green-400/30 text-green-200 bg-green-900/20' : 'border-white/10 text-white/70 bg-white/5'}`}>
+                  {runtime.running ? `稼働中: ${runtime.phase}` : '停止中'}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <div className="text-xs text-white/70 mb-1">ネットワーク</div>
+                  <select value={networkKey} onChange={(e: ChangeEvent<HTMLSelectElement>) => setNetworkKey(e.target.value)} className="w-full bg-slate-950/50 border border-white/10 rounded-xl p-2 text-sm">
+                    {Object.keys(allNetworks).map(k => (
+                      <option key={k} value={k}>{allNetworks[k].name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <div className="text-xs text-white/70 mb-1">交換元（Base）</div>
+                  <select value={baseTokenAddress} onChange={(e: ChangeEvent<HTMLSelectElement>) => setBaseTokenAddress(e.target.value)} className="w-full bg-slate-950/50 border border-white/10 rounded-xl p-2 text-sm">
+                    <option value="USDC">USDC</option>
+                    <option value="NATIVE">Native（{allNetworks[networkKey]?.symbol || 'NATIVE'}）</option>
+                    {UNISWAP_ADDRESSES[networkKey]?.WETH ? (
+                      <option value={UNISWAP_ADDRESSES[networkKey].WETH}>
+                        Wrapped Native（{networkKey === 'polygon' ? 'WMATIC/WPOL' : 'WETH'}）
+                      </option>
+                    ) : null}
+
+                    {heldTokens.length ? (
+                      <optgroup label="所持しているトークン">
+                        {heldTokens.map(t => (
+                          <option key={`held-${t.address}`} value={t.address}>
+                            {t.symbol} - {t.name}（{t.balance}）
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+
+                    {majorTokens.length ? (
+                      <optgroup label="主要トークン">
+                        {majorTokens.map(t => (
+                          <option key={`major-base-${t.address}`} value={t.address}>{t.symbol} - {t.name}</option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+                  </select>
+                </div>
+
+                <div>
+                  <div className="text-xs text-white/70 mb-1">交換先（Target）</div>
+                  <select value={targetAddress} onChange={(e: ChangeEvent<HTMLSelectElement>) => setTargetAddress(e.target.value)} className="w-full bg-slate-950/50 border border-white/10 rounded-xl p-2 text-sm">
+                    <option value="">選択してください</option>
+                    {recommended.length ? (
+                      <optgroup label="おすすめ（直近24h出来高）">
+                        {recommended.map(r => (
+                          <option key={`rec-${r.token.address}`} value={r.token.address}>
+                            {r.token.symbol} - {r.token.name}（{formatUsd(r.volumeH24Usd)}/24h）
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+
+                    {heldTokens.length ? (
+                      <optgroup label="所持しているトークン">
+                        {heldTokens.map(t => (
+                          <option key={`held-target-${t.address}`} value={t.address}>
+                            {t.symbol} - {t.name}（{t.balance}）
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+
+                    {majorTokens.length ? (
+                      <optgroup label="主要トークン">
+                        {majorTokens.map(t => (
+                          <option key={`major-target-${t.address}`} value={t.address}>{t.symbol} - {t.name}</option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+
+                    {customTargets.length ? (
+                      <optgroup label="指定したアドレスのトークン">
+                        {customTargets.map(t => (
+                          <option key={`custom-${t.address}`} value={t.address}>{t.symbol} - {t.name}</option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+                  </select>
+
+                  <div className="mt-2 flex gap-2">
+                    <Input value={customTargetAddr} onChange={(e: ChangeEvent<HTMLInputElement>) => setCustomTargetAddr(e.target.value)} placeholder="トークンアドレス（0x...）" />
+                    <Button variant="secondary" onClick={addCustomTarget}>追加</Button>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs text-white/70 mb-1">投入額（Base）</div>
+                  <Input value={amountIn} onChange={(e: ChangeEvent<HTMLInputElement>) => setAmountIn(e.target.value)} placeholder="例: 50" />
+                </div>
+
+                <div>
+                  <div className="text-xs text-white/70 mb-1">利確（%）</div>
+                  <Input value={String(takeProfitPct)} onChange={(e: ChangeEvent<HTMLInputElement>) => setTakeProfitPct(Number(e.target.value || 0))} placeholder="2" />
+                </div>
+
+                <div>
+                  <div className="text-xs text-white/70 mb-1">損切り（%）</div>
+                  <Input value={String(stopLossPct)} onChange={(e: ChangeEvent<HTMLInputElement>) => setStopLossPct(Number(e.target.value || 0))} placeholder="2" />
+                </div>
+
+                <div>
+                  <div className="text-xs text-white/70 mb-1">再エントリー条件（前回売値から下落%）</div>
+                  <Input value={String(reentryDropPct)} onChange={(e: ChangeEvent<HTMLInputElement>) => setReentryDropPct(Number(e.target.value || 0))} placeholder="1" />
+                </div>
+
+                <div>
+                  <div className="text-xs text-white/70 mb-1">判定間隔（秒）</div>
+                  <Input value={String(pollSeconds)} onChange={(e: ChangeEvent<HTMLInputElement>) => setPollSeconds(Math.max(10, Number(e.target.value || 10)))} placeholder="10" />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 mt-4">
+                {!runtime.running ? (
+                  <Button onClick={start}>開始</Button>
+                ) : (
+                  <Button onClick={stop} variant="secondary">停止</Button>
+                )}
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const url = chrome.runtime.getURL('index.html');
+                    if (chrome.tabs?.create) chrome.tabs.create({ url });
+                    else window.open(url, '_blank');
+                  }}
+                >
+                  メインへ
+                </Button>
+
+                <label className="text-xs text-white/70 ml-auto flex items-center gap-2">
+                  背景画像
+                  <input type="file" accept="image/*" onChange={(e: ChangeEvent<HTMLInputElement>) => handleSetRunnerBg(e.target.files?.[0])} className="text-xs" />
+                  <button className="px-2 py-1 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10" onClick={() => handleSetRunnerBg(undefined)}>クリア</button>
+                </label>
+              </div>
+            </GlassCard>
+
+            <GlassCard className="p-4">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold text-cyan-100">取引ログ</div>
+                <div className="flex gap-2">
+                  <Button variant="ghost" onClick={async () => { await clearTradeLog(); setTradeLog([]); }}>
+                    履歴リセット
+                  </Button>
+                </div>
+                <div className={`text-sm font-bold ${pnlUsd.total >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                  合計 {pnlUsd.total >= 0 ? '+' : ''}{pnlUsd.total.toFixed(2)} USD
+                </div>
+              </div>
+              <div className="text-xs text-white/60 mt-1">勝ち {pnlUsd.wins} / 負け {pnlUsd.losses}</div>
+
+              <div className="mt-3 max-h-[320px] overflow-y-auto custom-scrollbar pr-1">
+                {tradeLog.length === 0 ? (
+                  <div className="text-xs text-white/60">まだ取引ログはありません</div>
+                ) : (
+                  <div className="space-y-2">
+                    {[...tradeLog].slice(-50).reverse().map((e, idx) => {
+                      const time = new Date(e.t).toLocaleString();
+                      return (
+                        <div key={idx} className="flex items-center justify-between bg-white/5 border border-white/10 rounded-xl px-3 py-2">
+                          <div className="flex flex-col">
+                            <div className="text-xs text-white/80">{time}</div>
+                            <div className="text-sm font-semibold">
+                              {e.kind === 'ENTRY' ? 'BUY' : 'SELL'} {selectedTarget?.symbol || ''} / {baseLabel}
+                            </div>
+                            {typeof e.priceBasePerTarget === 'number' && (
+                              <div className="text-xs text-white/60">
+                                price ≈ {e.priceBasePerTarget.toLocaleString(undefined,{maximumFractionDigits: 8})} {baseLabel} per {selectedTarget?.symbol || 'TOKEN'}
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            {e.txHash ? (
+                              <div className="text-xs font-mono text-cyan-200">{e.txHash.slice(0,8)}…{e.txHash.slice(-6)}</div>
+                            ) : (
+                              <div className="text-xs text-white/40">txなし</div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </GlassCard>
+          </div>
+
+          {/* Right: charts */}
+          <div className="space-y-4">
+            <GlassCard className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="font-semibold text-cyan-100">チャート</div>
+                <div className="flex gap-2">
+                  {tfButton(1,'1時間')}
+                  {tfButton(12,'12時間')}
+                  {tfButton(24,'24時間')}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4">
+                <PriceChart
+                  title={`Base: ${baseLabel} / USD`}
+                  points={filteredBasePoints}
+                  markers={markers}
+                  valueSuffix=""
+                />
+                <PriceChart
+                  title={`Target: ${selectedTarget?.symbol || '—'} / USD`}
+                  points={filteredTargetPoints}
+                  markers={markers}
+                  valueSuffix=""
+                />
+              </div>
+            </GlassCard>
+          </div>
+        </div>
+      </div>
+    </PageWrapper>
   );
 };

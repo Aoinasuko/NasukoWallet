@@ -18,8 +18,8 @@ const formatTime = (t: number) => {
 };
 
 export const PriceChart = ({ title, points, markers = [], valueSuffix = '' }: Props) => {
-  const { pathD, minV, maxV, minT, maxT } = useMemo(() => {
-    if (!points.length) return { pathD: '', minV: 0, maxV: 1, minT: 0, maxT: 1 };
+  const { pathD, minV, maxV, minT, maxT, yTicks } = useMemo(() => {
+    if (!points.length) return { pathD: '', minV: 0, maxV: 1, minT: 0, maxT: 1, yTicks: [] as number[] };
     const vs = points.map(p => p.value);
     const ts = points.map(p => p.t);
     let minV = Math.min(...vs);
@@ -42,10 +42,37 @@ export const PriceChart = ({ title, points, markers = [], valueSuffix = '' }: Pr
       .sort((a,b)=>a.t-b.t)
       .map((p,i)=>`${i===0?'M':'L'} ${x(p.t).toFixed(2)} ${y(p.value).toFixed(2)}`)
       .join(' ');
-    return { pathD: d, minV, maxV, minT, maxT };
+    // ----- nice tick generation (adaptive grid) -----
+    const niceStep = (range: number, desired: number) => {
+      if (range <= 0) return 1;
+      const rough = range / desired;
+      const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+      const n = rough / pow;
+      const nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+      return nice * pow;
+    };
+
+    const ticks: number[] = [];
+    const range = maxV - minV;
+    const step = niceStep(range, 5);
+    const start = Math.ceil(minV / step) * step;
+    const end = Math.floor(maxV / step) * step;
+    for (let v = start; v <= end + step * 0.0001; v += step) {
+      // avoid too many ticks
+      if (ticks.length > 12) break;
+      ticks.push(v);
+    }
+
+    return { pathD: d, minV, maxV, minT, maxT, yTicks: ticks };
   }, [points]);
 
   const W = 560, H = 160, PAD = 10;
+
+  const yForV = (v: number) => {
+    if (!points.length) return H - PAD;
+    if (maxV === minV) return H - PAD;
+    return H - PAD - ((v - minV) / (maxV - minV)) * (H - PAD * 2);
+  };
 
   const xForT = (t:number) => {
     if (!points.length) return PAD;
@@ -71,6 +98,18 @@ export const PriceChart = ({ title, points, markers = [], valueSuffix = '' }: Pr
           <div className="text-xs text-white/60">データ取得中…</div>
         ) : (
           <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+            {/* horizontal grid lines with labels (adaptive) */}
+            {yTicks?.map((v, idx) => {
+              const y = yForV(v);
+              return (
+                <g key={`yt-${idx}`}>
+                  <line x1={0} y1={y} x2={W} y2={y} stroke="currentColor" strokeWidth="1" className="text-white/10" />
+                  <text x={PAD} y={Math.max(10, y - 2)} fontSize="10" fill="currentColor" className="text-white/45">
+                    {v.toLocaleString(undefined, { maximumFractionDigits: 8 })}{valueSuffix}
+                  </text>
+                </g>
+              );
+            })}
             <path d={pathD} fill="none" stroke="currentColor" strokeWidth="2" className="text-white/80" />
             {/* markers */}
             {markers.map((m, idx) => {

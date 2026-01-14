@@ -162,9 +162,11 @@ function App() {
     setMainNetwork(mainNet);
 
     // Runner mode is independent from the vault login (it uses a separate bot key).
+    // Runner mode: if already logged in (session.masterPass), go directly to auto-trade screen.
     if (isRunnerMode) {
-      setView('runner');
-      return;
+      if (!local.vault) { setView('setup'); return; }
+      if (session.masterPass) { setView('runner'); return; }
+      // If not logged in, show login as usual.
     }
 
     if (!local.vault) setView('setup');
@@ -246,7 +248,8 @@ function App() {
   const handleStartSetup = (pass: string, secret: any, qr: string) => { setMasterPass(pass); setTempSecret(secret); setQrDataUrl(qr); setView('2fa_setup'); };
   const handleFinishSetup = async (code: string) => { if (!verifyTotp(code, tempSecret.base32 || tempSecret)) return alert("コードが違います"); const v: VaultData = { totpSecret: tempSecret.base32 || tempSecret, isSetupComplete: true }; await chrome.storage.local.set({ vault: encryptData(v, masterPass) }); await chrome.storage.session.set({ masterPass }); setSessionMasterPass(masterPass); setView('list'); };
   const handleLogin = async (pass: string, code: string) => { setLoading(true); try { const local = await chrome.storage.local.get(['vault']) as StorageLocal; const v = decryptData(local.vault!, pass) as VaultData; if (!v || !verifyTotp(code, v.totpSecret)) throw new Error(); await chrome.storage.session.set({ masterPass: pass }); setSessionMasterPass(pass); setView('list'); fetchPrices(allNetworks[networkKey], allNetworks[local.mainNetwork || 'mainnet']); } catch { alert("認証に失敗しました"); } finally { setLoading(false); } };
-  const handleUnlockAccount = async (acc: SavedAccount) => { setLoading(true); try { const pass = decryptData(acc.encryptedPassword, sessionMasterPass); const w = await ethers.Wallet.fromEncryptedJson(acc.encryptedJson, pass); chrome.runtime.sendMessage({ type: "WALLET_UNLOCKED", address: w.address }); setWallet(w); updateBalance(w, allNetworks[networkKey].rpc); setView('home'); } catch { alert("解除に失敗しました"); } finally { setLoading(false); } };
+  const handleUnlockAccount = async (acc: SavedAccount) => { setLoading(true); try { const pass = decryptData(acc.encryptedPassword, sessionMasterPass); const w = await ethers.Wallet.fromEncryptedJson(acc.encryptedJson, pass); chrome.runtime.sendMessage({ type: "WALLET_UNLOCKED", address: w.address }); setWallet(w);
+        chrome.storage.local.set({ lastUnlockedAccount: w.address }); updateBalance(w, allNetworks[networkKey].rpc); setView('home'); } catch { alert("解除に失敗しました"); } finally { setLoading(false); } };
   const handleImport = async (type: 'json'|'privateKey', val: string, pass: string, name: string) => { try { let w, j; if (type === 'json') { w = await ethers.Wallet.fromEncryptedJson(val, pass); j = val; } else { w = new ethers.Wallet(val.startsWith('0x') ? val : '0x' + val); j = await w.encrypt(pass); } if (savedAccounts.find(a => a.address === w.address)) return alert("既に登録されています"); const ep = encryptData(pass, sessionMasterPass); const n = [...savedAccounts, { name, address: w.address, encryptedJson: j, encryptedPassword: ep }]; setSavedAccounts(n); await chrome.storage.local.set({ accounts: n }); setView('list'); } catch { alert("インポート失敗"); } };
   const handleDeleteAccount = async (addr: string) => { if (!confirm("本当に削除しますか？")) return; const n = savedAccounts.filter(a => a.address !== addr); setSavedAccounts(n); await chrome.storage.local.set({ accounts: n }); };
   const handleSetBg = async (img: string | null) => { setBgImage(img); if(img) await chrome.storage.local.set({ bgImage: img }); else await chrome.storage.local.remove('bgImage'); };
@@ -269,7 +272,7 @@ function App() {
   if (view === 'setup') return <WelcomeView onStartSetup={handleStartSetup} />;
   if (view === '2fa_setup') return <Setup2FAView qrUrl={qrDataUrl} onFinishSetup={handleFinishSetup} />;
   if (view === 'login') return <LoginView onLogin={handleLogin} loading={loading} />;
-  if (view === 'runner') return <RunnerView allNetworks={allNetworks} />;
+  if (view === 'runner') return <RunnerView wallet={wallet} networkKey={networkKey} allNetworks={allNetworks} bgImage={bgImage} />;
   
   if (wallet) {
     if (view === 'home') return <HomeView wallet={wallet} balance={balance} networkKey={networkKey} allNetworks={allNetworks} currentPrice={currentPrice} currency={currency} onSetCurrency={() => setCurrency(prev => prev==='JPY'?'USD':'JPY')} tokenList={tokenList} nftList={nftList} isAssetLoading={isAssetLoading} onChangeNetwork={changeNetwork} setView={setView} onLogout={() => { setWallet(null); setView('list'); }} bgImage={bgImage} />;

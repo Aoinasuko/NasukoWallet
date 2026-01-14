@@ -108,8 +108,18 @@ export const HomeView = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-2 mb-6 px-2">
-        {[{ label: '送金', icon: '↑', action: () => setView('send') }, { label: '入金', icon: '↓', action: () => setView('receive') }, { label: '取引', icon: '⇄', action: () => setView('swap') }, { label: '履歴', icon: '🕒', action: () => setView('history') }].map(btn => (
+      <div className="grid grid-cols-5 gap-2 mb-6 px-2">
+        {[
+          { label: '送金', icon: '↑', action: () => setView('send') },
+          { label: '入金', icon: '↓', action: () => setView('receive') },
+          { label: 'スワップ', icon: '⇄', action: () => setView('swap') },
+          { label: '自動取引', icon: '🤖', action: () => {
+              const url = chrome.runtime.getURL('index.html?mode=runner');
+              if (chrome.tabs?.create) chrome.tabs.create({ url });
+              else window.open(url, '_blank');
+            } },
+          { label: '履歴', icon: '🕒', action: () => setView('history') },
+        ].map(btn => (
           <button key={btn.label} onClick={btn.action} className="flex flex-col items-center gap-2 group p-2 rounded-xl hover:bg-white/5 transition">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-600 to-blue-600 flex items-center justify-center shadow-lg text-lg text-white group-hover:scale-110 transition">{btn.icon}</div>
             <span className="text-[10px] font-medium text-cyan-100/70">{btn.label}</span>

@@ -125,6 +125,84 @@ export const fetchTokens = async (address: string, networkKey: string): Promise<
   }
 };
 
+// Lightweight held-token fetch for Runner/autotrade.
+// - Uses Alchemy token balances + metadata
+// - Does NOT call CoinGecko (avoids rate limits)
+export const fetchHeldTokensBasic = async (address: string, networkKey: string): Promise<TokenData[]> => {
+  const network = NETWORK_MAP[networkKey];
+  if (!network) return [];
+
+  const config = { apiKey: API_KEY, network };
+  const alchemy = new Alchemy(config);
+
+  try {
+    const balances = await alchemy.core.getTokenBalances(address);
+    const tokens: TokenData[] = [];
+
+    await Promise.all(
+      balances.tokenBalances.map(async (token) => {
+        if (!token.tokenBalance) return;
+        const contractAddrLower = token.contractAddress.toLowerCase();
+
+        let decimals = 18;
+        let name = 'Unknown';
+        let symbol = '???';
+        let logo = '';
+
+        try {
+          const metadata = await alchemy.core.getTokenMetadata(token.contractAddress);
+          if (KNOWN_DECIMALS[contractAddrLower]) {
+            decimals = KNOWN_DECIMALS[contractAddrLower];
+          } else if (metadata.decimals !== null && metadata.decimals !== undefined) {
+            decimals = metadata.decimals;
+          }
+          name = metadata.name || name;
+          symbol = metadata.symbol || symbol;
+          logo = metadata.logo || logo;
+        } catch (e) {
+          if (KNOWN_DECIMALS[contractAddrLower]) {
+            decimals = KNOWN_DECIMALS[contractAddrLower];
+          }
+        }
+
+        const balanceFormatted = ethers.formatUnits(token.tokenBalance, decimals);
+        if (parseFloat(balanceFormatted) < 0.00000001) return;
+
+        tokens.push({
+          name,
+          symbol,
+          balance: formatFullNumber(parseFloat(balanceFormatted)),
+          logo,
+          address: token.contractAddress,
+        });
+      })
+    );
+
+    return tokens;
+  } catch (error) {
+    console.error('Alchemy Token Error:', error);
+    return [];
+  }
+};
+
+export const fetchTokenMetadataBasic = async (tokenAddress: string, networkKey: string): Promise<{ name: string; symbol: string; decimals: number; logo: string } | null> => {
+  const network = NETWORK_MAP[networkKey];
+  if (!network) return null;
+  const config = { apiKey: API_KEY, network };
+  const alchemy = new Alchemy(config);
+  try {
+    const md = await alchemy.core.getTokenMetadata(tokenAddress);
+    return {
+      name: md.name || 'Unknown',
+      symbol: md.symbol || '???',
+      decimals: (md.decimals ?? 18) as number,
+      logo: md.logo || '',
+    };
+  } catch (e) {
+    return null;
+  }
+};
+
 export const fetchNfts = async (address: string, networkKey: string): Promise<NftData[]> => {
     // (省略: 変更なし)
     const network = NETWORK_MAP[networkKey];

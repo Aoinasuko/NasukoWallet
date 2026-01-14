@@ -59,7 +59,7 @@ export const DEX_URLS: Record<string, string> = {
 };
 
 // ★修正: SwapRouter02アドレス (0x68b3...) を使用。旧Router (0xE592...) はDeadline必須のため現行ABIと不整合だった。
-export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; USDC: string; MATIC?: string; POL?: string }> = {
+export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; USDC: string; USDC_NATIVE?: string; USDC_E?: string; MATIC?: string; POL?: string }> = {
   sepolia: {
     ROUTER: "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E", 
     WETH: "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", 
@@ -75,15 +75,21 @@ export const UNISWAP_ADDRESSES: Record<string, { ROUTER: string; WETH: string; U
   },
   polygon: {
     ROUTER: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+    // NOTE: In this codebase, WETH is used as "wrapped native".
+    // Polygon wrapped-native is WMATIC/WPOL.
     WETH: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+    USDC_NATIVE: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+    USDC_E: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+    // Default USDC (will be resolved dynamically for best liquidity)
     USDC: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
     MATIC: "0x0000000000000000000000000000000000001010", // Native Token System Contract
   },
   optimism: {
     ROUTER: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
     WETH: "0x4200000000000000000000000000000000000006",
-    USDC: "0x0b2C639c533813f4Aa9D7837CAf992cL92055", // Example
-  }
+    // Optimism USDC (native)
+    USDC: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+  },
   // 他チェーンも Router02 は 0x68b3... が一般的
 };
 
